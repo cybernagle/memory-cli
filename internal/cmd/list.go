@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -20,6 +21,9 @@ var listCmd = &cobra.Command{
 	Use:   "list",
 	Short: "List memories",
 	RunE: func(cmd *cobra.Command, args []string) error {
+		if err := validateType(listType); err != nil {
+			return err
+		}
 		s, err := getStore()
 		if err != nil {
 			return err
@@ -37,6 +41,10 @@ var listCmd = &cobra.Command{
 			fmt.Println("No memories found.")
 			return nil
 		}
+
+		sort.Slice(all, func(i, j int) bool {
+			return all[i].CreatedAt.Before(all[j].CreatedAt)
+		})
 
 		total := len(all)
 		memories := all
@@ -69,6 +77,13 @@ func init() {
 	listCmd.Flags().StringVar(&listSource, "source", "", "Filter by source")
 	listCmd.Flags().IntVar(&listLimit, "limit", 50, "Max results")
 	rootCmd.AddCommand(listCmd)
+}
+
+func validateType(t string) error {
+	if t != "" && t != "short" && t != "long" {
+		return fmt.Errorf("invalid type %q: must be 'short' or 'long'", t)
+	}
+	return nil
 }
 
 func truncateRunes(s string, maxRunes int) string {

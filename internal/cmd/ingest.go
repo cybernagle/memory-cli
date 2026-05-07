@@ -43,7 +43,11 @@ var ingestCmd = &cobra.Command{
 			count := 0
 			for _, mem := range memories {
 				hash := contentHash(mem.Content)
-				existing, _ := s.FindByHash(hash)
+				existing, err := s.FindByHash(hash)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "Error checking dedup for %s: %v\n", name, err)
+					continue
+				}
 				if existing != nil {
 					continue
 				}

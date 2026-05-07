@@ -19,14 +19,20 @@ type Task interface {
 	Run(s *store.Store) (int, error)
 }
 
-func New(s *store.Store, interval time.Duration) *Daemon {
+func New(s *store.Store, interval time.Duration, decayThreshold time.Duration, upgradeAccess int) *Daemon {
+	if decayThreshold == 0 {
+		decayThreshold = 30 * 24 * time.Hour
+	}
+	if upgradeAccess == 0 {
+		upgradeAccess = 3
+	}
 	return &Daemon{
 		store:    s,
 		interval: interval,
 		tasks: []Task{
 			&ExpireTask{},
-			&DecayTask{Threshold: 30 * 24 * time.Hour},
-			&UpgradeTask{Threshold: 3},
+			&DecayTask{Threshold: decayThreshold},
+			&UpgradeTask{Threshold: upgradeAccess},
 			&ConsolidateTask{},
 		},
 	}

@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -33,6 +35,10 @@ var serveCmd = &cobra.Command{
 		if err != nil {
 			return fmt.Errorf("load config: %w", err)
 		}
+		decayThreshold, err := parseDurationConfig(cfg.Daemon.DecayThreshold)
+		if err != nil {
+			return fmt.Errorf("invalid decay_threshold: %w", err)
+		}
 		lockPath := cfg.Storage.Root + "/.daemon.lock"
 		lockFile, err := os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0644)
 		if err != nil {
@@ -53,7 +59,7 @@ var serveCmd = &cobra.Command{
 		sigCh := make(chan os.Signal, 1)
 		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
-		d := daemon.New(s, interval)
+		d := daemon.New(s, interval, decayThreshold, cfg.Daemon.UpgradeAccess)
 		go func() {
 			<-sigCh
 			fmt.Println("\nShutting down...")
@@ -67,4 +73,18 @@ var serveCmd = &cobra.Command{
 func init() {
 	serveCmd.Flags().StringVar(&serveInterval, "interval", "60s", "Processing interval")
 	rootCmd.AddCommand(serveCmd)
+}
+
+func parseDurationConfig(s string) (time.Duration, error) {
+	if s == "" {
+		return 30 * 24 * time.Hour, nil
+	}
+	if strings.HasSuffix(s, "d") {
+		days, err := strconv.Atoi(strings.TrimSuffix(s, "d"))
+		if err != nil {
+			return 0, fmt.Errorf("invalid day duration: %q", s)
+		}
+		return time.Duration(days) * 24 * time.Hour, nil
+	}
+	return time.ParseDuration(s)
 }

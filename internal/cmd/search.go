@@ -23,6 +23,9 @@ var searchCmd = &cobra.Command{
 	Short: "Search memories by keyword",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
+		if err := validateType(searchType); err != nil {
+			return err
+		}
 		s, err := getStore()
 		if err != nil {
 			return err

@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -162,6 +163,7 @@ func (s *Store) Tag(id string, add, remove []string) (*Memory, error) {
 	for t := range tagSet {
 		tags = append(tags, t)
 	}
+	sort.Strings(tags)
 	mem.Tags = tags
 	mem.UpdatedAt = time.Now()
 	if err := s.writeToFile(mem); err != nil {
@@ -261,7 +263,11 @@ func (s *Store) writeToFile(mem *Memory) error {
 	sb.WriteString(mem.Content + "\n")
 
 	path := filepath.Join(dir, mem.ID+".md")
-	return os.WriteFile(path, []byte(sb.String()), 0644)
+	tmpPath := path + ".tmp"
+	if err := os.WriteFile(tmpPath, []byte(sb.String()), 0644); err != nil {
+		return err
+	}
+	return os.Rename(tmpPath, path)
 }
 
 func (s *Store) readFromFile(path string) (*Memory, error) {

@@ -22,7 +22,9 @@ type StorageConfig struct {
 }
 
 type DaemonConfig struct {
-	Interval string `yaml:"interval"`
+	Interval       string `yaml:"interval"`
+	DecayThreshold string `yaml:"decay_threshold"`
+	UpgradeAccess  int    `yaml:"upgrade_access_threshold"`
 }
 
 type SourceConfig struct {
@@ -49,7 +51,9 @@ func DefaultConfig() *Config {
 			ShortTermTTL: "24h",
 		},
 		Daemon: DaemonConfig{
-			Interval: "60s",
+			Interval:       "60s",
+			DecayThreshold: "720h",
+			UpgradeAccess:  3,
 		},
 	}
 }
