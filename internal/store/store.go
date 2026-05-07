@@ -163,6 +163,24 @@ func (s *Store) Tag(id string, add, remove []string) (*Memory, error) {
 	return mem, nil
 }
 
+func (s *Store) Upgrade(id string) error {
+	mem, err := s.findByID(id)
+	if err != nil {
+		return err
+	}
+	if mem.Type == LongTerm {
+		return nil
+	}
+	oldPath := s.filePath(mem)
+	mem.Type = LongTerm
+	mem.ExpiresAt = nil
+	mem.UpdatedAt = time.Now()
+	if err := s.writeToFile(mem); err != nil {
+		return err
+	}
+	return os.Remove(oldPath)
+}
+
 func (s *Store) findByID(id string) (*Memory, error) {
 	dirs := []string{s.cfg.ShortTermDir(), s.cfg.LongTermDir()}
 	for _, dir := range dirs {

@@ -1,0 +1,82 @@
+package cmd
+
+import (
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/spf13/cobra"
+
+	"github.com/cybernagle/memory-cli/internal/store"
+)
+
+var (
+	searchTags  string
+	searchScope string
+	searchType  string
+	searchFrom  string
+	searchTo    string
+)
+
+var searchCmd = &cobra.Command{
+	Use:   "search [query]",
+	Short: "Search memories by keyword",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		s, err := getStore()
+		if err != nil {
+			return err
+		}
+
+		opts := store.SearchOptions{
+			Query: args[0],
+			Scope: searchScope,
+			Type:  store.MemoryType(searchType),
+		}
+		if searchTags != "" {
+			opts.Tags = strings.Split(searchTags, ",")
+		}
+		if searchFrom != "" {
+			t, err := time.Parse("2006-01-02", searchFrom)
+			if err != nil {
+				return fmt.Errorf("invalid --from date: %w", err)
+			}
+			opts.From = &t
+		}
+		if searchTo != "" {
+			t, err := time.Parse("2006-01-02", searchTo)
+			if err != nil {
+				return fmt.Errorf("invalid --to date: %w", err)
+			}
+			opts.To = &t
+		}
+
+		memories, err := s.Search(opts)
+		if err != nil {
+			return err
+		}
+		if len(memories) == 0 {
+			fmt.Println("No matching memories found.")
+			return nil
+		}
+		for _, m := range memories {
+			preview := m.Content
+			if len(preview) > 80 {
+				preview = preview[:80] + "..."
+			}
+			preview = strings.ReplaceAll(preview, "\n", " ")
+			fmt.Printf("%-8s %-6s %-10s %s\n", m.ID, m.Type, m.Scope, preview)
+		}
+		fmt.Printf("\nFound: %d memories\n", len(memories))
+		return nil
+	},
+}
+
+func init() {
+	searchCmd.Flags().StringVar(&searchTags, "tags", "", "Comma-separated tags to match")
+	searchCmd.Flags().StringVar(&searchScope, "scope", "", "Filter by scope")
+	searchCmd.Flags().StringVar(&searchType, "type", "", "Filter by type: short or long")
+	searchCmd.Flags().StringVar(&searchFrom, "from", "", "Filter from date (YYYY-MM-DD)")
+	searchCmd.Flags().StringVar(&searchTo, "to", "", "Filter to date (YYYY-MM-DD)")
+	rootCmd.AddCommand(searchCmd)
+}
