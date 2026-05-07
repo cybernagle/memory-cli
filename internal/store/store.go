@@ -78,10 +78,6 @@ func (s *Store) Read(id string) (*Memory, error) {
 		return nil, err
 	}
 	mem.AccessCount++
-	mem.UpdatedAt = time.Now()
-	if err := s.writeToFile(mem); err != nil {
-		return nil, err
-	}
 	return mem, nil
 }
 
@@ -250,7 +246,9 @@ func (s *Store) writeToFile(mem *Memory) error {
 	if err := enc.Encode(&fm); err != nil {
 		return fmt.Errorf("encode frontmatter: %w", err)
 	}
-	enc.Close()
+	if err := enc.Close(); err != nil {
+		return fmt.Errorf("flush frontmatter: %w", err)
+	}
 	sb.WriteString(frontMatterSeparator + "\n")
 	sb.WriteString(mem.Content + "\n")
 

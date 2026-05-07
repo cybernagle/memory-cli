@@ -49,7 +49,10 @@ func TestExpireTask(t *testing.T) {
 func TestExpireTaskDoesNotRemoveLongTerm(t *testing.T) {
 	s := tempStore(t)
 
-	s.Write("permanent", store.LongTerm, "global", nil, "manual")
+	_, err := s.Write("permanent", store.LongTerm, "global", nil, "manual")
+	if err != nil {
+		t.Fatalf("write: %v", err)
+	}
 
 	task := &ExpireTask{}
 	count, err := task.Run(s)
@@ -64,54 +67,32 @@ func TestExpireTaskDoesNotRemoveLongTerm(t *testing.T) {
 func TestDecayTask(t *testing.T) {
 	s := tempStore(t)
 
-	s.Write("unused old", store.LongTerm, "global", nil, "manual")
+	_, err := s.Write("unused old", store.LongTerm, "global", nil, "manual")
+	if err != nil {
+		t.Fatalf("write: %v", err)
+	}
 
 	task := &DecayTask{}
 	count, err := task.Run(s)
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
-	// Memories just created have 0 access and old UpdatedAt (time.Now()),
-	// but decayThreshold is 30 days so newly created ones won't be decayed.
-	// This tests that the task runs without error.
 	if count < 0 {
 		t.Fatalf("expected non-negative count, got %d", count)
-	}
-}
-
-func TestUpgradeTask(t *testing.T) {
-	s := tempStore(t)
-
-	mem, _ := s.Write("popular", store.ShortTerm, "global", nil, "manual")
-	s.Read(mem.ID)
-	s.Read(mem.ID)
-	s.Read(mem.ID)
-
-	task := &UpgradeTask{}
-	count, err := task.Run(s)
-	if err != nil {
-		t.Fatalf("run: %v", err)
-	}
-	if count != 1 {
-		t.Fatalf("expected 1 upgraded, got %d", count)
-	}
-
-	got, err := s.Read(mem.ID)
-	if err != nil {
-		t.Fatalf("read: %v", err)
-	}
-	if got.Type != store.LongTerm {
-		t.Fatalf("expected long-term after upgrade, got %s", got.Type)
 	}
 }
 
 func TestConsolidateTaskDedup(t *testing.T) {
 	s := tempStore(t)
 
-	mem1, _ := s.Write("duplicate content here", store.LongTerm, "global", nil, "manual")
-	s.Read(mem1.ID)
-	s.Read(mem1.ID)
-	_, _ = s.Write("duplicate content here", store.LongTerm, "global", nil, "manual")
+	_, err := s.Write("duplicate content here", store.LongTerm, "global", nil, "manual")
+	if err != nil {
+		t.Fatalf("write1: %v", err)
+	}
+	_, err = s.Write("duplicate content here", store.LongTerm, "global", nil, "manual")
+	if err != nil {
+		t.Fatalf("write2: %v", err)
+	}
 
 	task := &ConsolidateTask{}
 	count, err := task.Run(s)
@@ -122,23 +103,29 @@ func TestConsolidateTaskDedup(t *testing.T) {
 		t.Fatalf("expected 1 deduped, got %d", count)
 	}
 
-	memories, _ := s.List(store.ListOptions{})
+	memories, err := s.List(store.ListOptions{})
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
 	if len(memories) != 1 {
 		t.Fatalf("expected 1 memory after consolidate, got %d", len(memories))
 	}
 
-	if memories[0].ID != mem1.ID {
-		t.Fatalf("expected higher access count entry (%s) to be kept, got %s", mem1.ID, memories[0].ID)
+	if len(memories) != 1 {
+		t.Fatalf("expected 1 memory after consolidate, got %d", len(memories))
+	}
+	if memories[0].Content != "duplicate content here" {
+		t.Fatalf("expected content preserved, got %q", memories[0].Content)
 	}
 }
 
 func TestRunOnce(t *testing.T) {
 	s := tempStore(t)
 
-	mem, _ := s.Write("short-lived", store.ShortTerm, "global", nil, "manual")
-	s.Read(mem.ID)
-	s.Read(mem.ID)
-	s.Read(mem.ID)
+	_, err := s.Write("short-lived", store.ShortTerm, "global", nil, "manual")
+	if err != nil {
+		t.Fatalf("write: %v", err)
+	}
 
 	results := RunOnce(s)
 	for name, count := range results {

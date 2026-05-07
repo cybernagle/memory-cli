@@ -42,16 +42,19 @@ func tempStoreWithTTL(t *testing.T, ttl string) (*Store, string) {
 	return s, dir
 }
 
+func mustWrite(t *testing.T, s *Store, content string, memType MemoryType, scope string, tags []string, source string) *Memory {
+	t.Helper()
+	mem, err := s.Write(content, memType, scope, tags, source)
+	if err != nil {
+		t.Fatalf("write %q: %v", content, err)
+	}
+	return mem
+}
+
 func TestWriteAndRead(t *testing.T) {
 	s, _ := tempStore(t)
 
-	mem, err := s.Write("hello world", LongTerm, "global", []string{"test"}, "manual")
-	if err != nil {
-		t.Fatalf("write: %v", err)
-	}
-	if mem.ID == "" {
-		t.Fatal("expected non-empty ID")
-	}
+	mem := mustWrite(t, s, "hello world", LongTerm, "global", []string{"test"}, "manual")
 	if len(mem.ID) < 32 {
 		t.Fatalf("expected full UUID, got short ID: %s", mem.ID)
 	}
@@ -77,10 +80,7 @@ func TestWriteAndRead(t *testing.T) {
 func TestWriteShortTermHasExpiry(t *testing.T) {
 	s, _ := tempStore(t)
 
-	mem, err := s.Write("ephemeral", ShortTerm, "global", nil, "manual")
-	if err != nil {
-		t.Fatalf("write: %v", err)
-	}
+	mem := mustWrite(t, s, "ephemeral", ShortTerm, "global", nil, "manual")
 	if mem.ExpiresAt == nil {
 		t.Fatal("short-term memory should have expires_at")
 	}
@@ -92,10 +92,7 @@ func TestWriteShortTermHasExpiry(t *testing.T) {
 func TestWriteLongTermNoExpiry(t *testing.T) {
 	s, _ := tempStore(t)
 
-	mem, err := s.Write("permanent", LongTerm, "global", nil, "manual")
-	if err != nil {
-		t.Fatalf("write: %v", err)
-	}
+	mem := mustWrite(t, s, "permanent", LongTerm, "global", nil, "manual")
 	if mem.ExpiresAt != nil {
 		t.Fatal("long-term memory should not have expires_at")
 	}
@@ -113,10 +110,7 @@ func TestWriteInvalidTTL(t *testing.T) {
 func TestWriteTTLDays(t *testing.T) {
 	s, _ := tempStoreWithTTL(t, "30d")
 
-	mem, err := s.Write("ephemeral", ShortTerm, "global", nil, "manual")
-	if err != nil {
-		t.Fatalf("write: %v", err)
-	}
+	mem := mustWrite(t, s, "ephemeral", ShortTerm, "global", nil, "manual")
 	if mem.ExpiresAt == nil {
 		t.Fatal("short-term memory should have expires_at")
 	}
@@ -130,14 +124,11 @@ func TestWriteTTLDays(t *testing.T) {
 func TestDelete(t *testing.T) {
 	s, _ := tempStore(t)
 
-	mem, err := s.Write("to be deleted", LongTerm, "global", nil, "manual")
-	if err != nil {
-		t.Fatalf("write: %v", err)
-	}
+	mem := mustWrite(t, s, "to be deleted", LongTerm, "global", nil, "manual")
 	if err := s.Delete(mem.ID); err != nil {
 		t.Fatalf("delete: %v", err)
 	}
-	_, err = s.Read(mem.ID)
+	_, err := s.Read(mem.ID)
 	if err == nil {
 		t.Fatal("expected error after delete")
 	}
@@ -164,9 +155,9 @@ func TestReadNonExistent(t *testing.T) {
 func TestListAll(t *testing.T) {
 	s, _ := tempStore(t)
 
-	s.Write("first", LongTerm, "global", nil, "manual")
-	s.Write("second", ShortTerm, "agent:claude", nil, "manual")
-	s.Write("third", LongTerm, "global", nil, "copilot")
+	mustWrite(t, s, "first", LongTerm, "global", nil, "manual")
+	mustWrite(t, s, "second", ShortTerm, "agent:claude", nil, "manual")
+	mustWrite(t, s, "third", LongTerm, "global", nil, "copilot")
 
 	memories, err := s.List(ListOptions{})
 	if err != nil {
@@ -180,8 +171,8 @@ func TestListAll(t *testing.T) {
 func TestListFilterByType(t *testing.T) {
 	s, _ := tempStore(t)
 
-	s.Write("long one", LongTerm, "global", nil, "manual")
-	s.Write("short one", ShortTerm, "global", nil, "manual")
+	mustWrite(t, s, "long one", LongTerm, "global", nil, "manual")
+	mustWrite(t, s, "short one", ShortTerm, "global", nil, "manual")
 
 	memories, err := s.List(ListOptions{Type: LongTerm})
 	if err != nil {
@@ -198,8 +189,8 @@ func TestListFilterByType(t *testing.T) {
 func TestListFilterByScope(t *testing.T) {
 	s, _ := tempStore(t)
 
-	s.Write("global", LongTerm, "global", nil, "manual")
-	s.Write("private", LongTerm, "agent:claude", nil, "manual")
+	mustWrite(t, s, "global", LongTerm, "global", nil, "manual")
+	mustWrite(t, s, "private", LongTerm, "agent:claude", nil, "manual")
 
 	memories, err := s.List(ListOptions{Scope: "agent:claude"})
 	if err != nil {
@@ -213,8 +204,8 @@ func TestListFilterByScope(t *testing.T) {
 func TestListFilterBySource(t *testing.T) {
 	s, _ := tempStore(t)
 
-	s.Write("from claude", LongTerm, "global", nil, "claude")
-	s.Write("from manual", LongTerm, "global", nil, "manual")
+	mustWrite(t, s, "from claude", LongTerm, "global", nil, "claude")
+	mustWrite(t, s, "from manual", LongTerm, "global", nil, "manual")
 
 	memories, err := s.List(ListOptions{Source: "claude"})
 	if err != nil {
@@ -229,7 +220,7 @@ func TestListLimit(t *testing.T) {
 	s, _ := tempStore(t)
 
 	for i := 0; i < 5; i++ {
-		s.Write("memory", LongTerm, "global", nil, "manual")
+		mustWrite(t, s, "memory", LongTerm, "global", nil, "manual")
 	}
 
 	memories, err := s.List(ListOptions{Limit: 3})
@@ -244,7 +235,7 @@ func TestListLimit(t *testing.T) {
 func TestTag(t *testing.T) {
 	s, _ := tempStore(t)
 
-	mem, _ := s.Write("tagged", LongTerm, "global", []string{"a"}, "manual")
+	mem := mustWrite(t, s, "tagged", LongTerm, "global", []string{"a"}, "manual")
 
 	updated, err := s.Tag(mem.ID, []string{"b", "c"}, []string{"a"})
 	if err != nil {
@@ -265,7 +256,7 @@ func TestTag(t *testing.T) {
 func TestMarkdownFileFormat(t *testing.T) {
 	s, dir := tempStore(t)
 
-	mem, _ := s.Write("test content", LongTerm, "global", []string{"x"}, "manual")
+	mem := mustWrite(t, s, "test content", LongTerm, "global", []string{"x"}, "manual")
 
 	path := filepath.Join(dir, "long-term", mem.ID+".md")
 	data, err := os.ReadFile(path)
@@ -296,8 +287,8 @@ func TestListEmpty(t *testing.T) {
 func TestSearchKeyword(t *testing.T) {
 	s, _ := tempStore(t)
 
-	s.Write("dark mode preference", LongTerm, "global", nil, "manual")
-	s.Write("vim keybindings", LongTerm, "global", nil, "manual")
+	mustWrite(t, s, "dark mode preference", LongTerm, "global", nil, "manual")
+	mustWrite(t, s, "vim keybindings", LongTerm, "global", nil, "manual")
 
 	results, err := s.Search(SearchOptions{Query: "dark mode"})
 	if err != nil {
@@ -314,8 +305,8 @@ func TestSearchKeyword(t *testing.T) {
 func TestSearchByTag(t *testing.T) {
 	s, _ := tempStore(t)
 
-	s.Write("pref1", LongTerm, "global", []string{"ui", "preference"}, "manual")
-	s.Write("pref2", LongTerm, "global", []string{"editor"}, "manual")
+	mustWrite(t, s, "pref1", LongTerm, "global", []string{"ui", "preference"}, "manual")
+	mustWrite(t, s, "pref2", LongTerm, "global", []string{"editor"}, "manual")
 
 	results, err := s.Search(SearchOptions{Tags: []string{"ui"}})
 	if err != nil {
@@ -329,7 +320,7 @@ func TestSearchByTag(t *testing.T) {
 func TestSearchNoMatch(t *testing.T) {
 	s, _ := tempStore(t)
 
-	s.Write("hello", LongTerm, "global", nil, "manual")
+	mustWrite(t, s, "hello", LongTerm, "global", nil, "manual")
 
 	results, err := s.Search(SearchOptions{Query: "nonexistent"})
 	if err != nil {
@@ -343,10 +334,7 @@ func TestSearchNoMatch(t *testing.T) {
 func TestUpgrade(t *testing.T) {
 	s, dir := tempStore(t)
 
-	mem, err := s.Write("upgrade me", ShortTerm, "global", nil, "manual")
-	if err != nil {
-		t.Fatalf("write: %v", err)
-	}
+	mem := mustWrite(t, s, "upgrade me", ShortTerm, "global", nil, "manual")
 	originalPath := filepath.Join(dir, "short-term", mem.ID+".md")
 	if _, err := os.Stat(originalPath); err != nil {
 		t.Fatal("short-term file should exist before upgrade")
@@ -379,17 +367,15 @@ func TestUpgrade(t *testing.T) {
 func TestUpgradeLongTermNoop(t *testing.T) {
 	s, _ := tempStore(t)
 
-	mem, _ := s.Write("already long", LongTerm, "global", nil, "manual")
-	err := s.Upgrade(mem.ID)
-	if err != nil {
+	mem := mustWrite(t, s, "already long", LongTerm, "global", nil, "manual")
+	if err := s.Upgrade(mem.ID); err != nil {
 		t.Fatalf("upgrade noop: %v", err)
 	}
 }
 
 func TestUpgradeNonExistent(t *testing.T) {
 	s, _ := tempStore(t)
-	err := s.Upgrade("nonexistent")
-	if err == nil {
+	if err := s.Upgrade("nonexistent"); err == nil {
 		t.Fatal("expected error for non-existent memory")
 	}
 }
@@ -398,10 +384,7 @@ func TestFrontmatterWithDashesInContent(t *testing.T) {
 	s, _ := tempStore(t)
 
 	content := "some content\n---\nmore content after dashes"
-	mem, err := s.Write(content, LongTerm, "global", nil, "manual")
-	if err != nil {
-		t.Fatalf("write: %v", err)
-	}
+	mem := mustWrite(t, s, content, LongTerm, "global", nil, "manual")
 
 	got, err := s.Read(mem.ID)
 	if err != nil {
@@ -443,4 +426,33 @@ func TestParseDurationInvalid(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for invalid day duration")
 	}
+}
+
+func TestReadDoesNotRewriteFile(t *testing.T) {
+	s, _ := tempStore(t)
+
+	mem := mustWrite(t, s, "test", LongTerm, "global", nil, "manual")
+	originalModTime := fileModTime(t, s.filePath(mem))
+
+	got, err := s.Read(mem.ID)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if got.AccessCount != 1 {
+		t.Fatalf("expected access_count=1, got %d", got.AccessCount)
+	}
+
+	newModTime := fileModTime(t, s.filePath(mem))
+	if !newModTime.Equal(originalModTime) {
+		t.Fatal("Read() should not rewrite the file")
+	}
+}
+
+func fileModTime(t *testing.T, path string) time.Time {
+	t.Helper()
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat: %v", err)
+	}
+	return info.ModTime()
 }

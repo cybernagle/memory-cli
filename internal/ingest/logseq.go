@@ -1,6 +1,7 @@
 package ingest
 
 import (
+	"log"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -28,7 +29,12 @@ func (a *LogseqAdapter) Ingest() ([]*store.Memory, error) {
 	var memories []*store.Memory
 
 	pagesDir := filepath.Join(a.Path, "pages")
-	if entries, err := os.ReadDir(pagesDir); err == nil {
+	entries, err := os.ReadDir(pagesDir)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			log.Printf("warning: read logseq pages dir: %v", err)
+		}
+	} else {
 		for _, e := range entries {
 			if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
 				continue
@@ -45,20 +51,25 @@ func (a *LogseqAdapter) Ingest() ([]*store.Memory, error) {
 			pageName := strings.TrimSuffix(e.Name(), ".md")
 			tags := []string{"logseq", pageName}
 			links := extractWikiLinks(content)
-			tags = append(tags, links...)
 
 			memories = append(memories, &store.Memory{
 				Content: content,
 				Type:    store.LongTerm,
 				Scope:   "global",
 				Tags:    uniqueTags(tags),
+				Links:   links,
 				Source:  "logseq",
 			})
 		}
 	}
 
 	journalsDir := filepath.Join(a.Path, "journals")
-	if entries, err := os.ReadDir(journalsDir); err == nil {
+	entries, err = os.ReadDir(journalsDir)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			log.Printf("warning: read logseq journals dir: %v", err)
+		}
+	} else {
 		for _, e := range entries {
 			if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
 				continue

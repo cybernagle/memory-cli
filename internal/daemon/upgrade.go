@@ -4,13 +4,18 @@ import (
 	"github.com/cybernagle/memory-cli/internal/store"
 )
 
-const upgradeThreshold = 3
-
-type UpgradeTask struct{}
+type UpgradeTask struct {
+	Threshold int
+}
 
 func (t *UpgradeTask) Name() string { return "upgrade" }
 
 func (t *UpgradeTask) Run(s *store.Store) (int, error) {
+	threshold := t.Threshold
+	if threshold == 0 {
+		threshold = 3
+	}
+
 	memories, err := s.List(store.ListOptions{Type: store.ShortTerm})
 	if err != nil {
 		return 0, err
@@ -18,7 +23,7 @@ func (t *UpgradeTask) Run(s *store.Store) (int, error) {
 
 	count := 0
 	for _, mem := range memories {
-		if mem.AccessCount >= upgradeThreshold {
+		if mem.AccessCount >= threshold {
 			if err := s.Upgrade(mem.ID); err != nil {
 				continue
 			}

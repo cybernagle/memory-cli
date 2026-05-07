@@ -48,7 +48,8 @@ var searchCmd = &cobra.Command{
 			if err != nil {
 				return fmt.Errorf("invalid --to date: %w", err)
 			}
-			opts.To = &t
+			endOfDay := t.Add(24*time.Hour - time.Nanosecond)
+			opts.To = &endOfDay
 		}
 
 		memories, err := s.Search(opts)
@@ -77,6 +78,6 @@ func init() {
 	searchCmd.Flags().StringVar(&searchScope, "scope", "", "Filter by scope")
 	searchCmd.Flags().StringVar(&searchType, "type", "", "Filter by type: short or long")
 	searchCmd.Flags().StringVar(&searchFrom, "from", "", "Filter from date (YYYY-MM-DD)")
-	searchCmd.Flags().StringVar(&searchTo, "to", "", "Filter to date (YYYY-MM-DD)")
+	searchCmd.Flags().StringVar(&searchTo, "to", "", "Filter to date inclusive (YYYY-MM-DD)")
 	rootCmd.AddCommand(searchCmd)
 }

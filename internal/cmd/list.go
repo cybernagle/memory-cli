@@ -24,20 +24,26 @@ var listCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		opts := store.ListOptions{
+		allOpts := store.ListOptions{
 			Type:   store.MemoryType(listType),
 			Scope:  listScope,
 			Source: listSource,
-			Limit:  listLimit,
 		}
-		memories, err := s.List(opts)
+		all, err := s.List(allOpts)
 		if err != nil {
 			return err
 		}
-		if len(memories) == 0 {
+		if len(all) == 0 {
 			fmt.Println("No memories found.")
 			return nil
 		}
+
+		total := len(all)
+		memories := all
+		if listLimit > 0 && len(memories) > listLimit {
+			memories = memories[:listLimit]
+		}
+
 		fmt.Printf("%-8s %-6s %-10s %-10s %-20s %s\n", "ID", "Type", "Scope", "Source", "Created", "Preview")
 		fmt.Println(strings.Repeat("-", 80))
 		for _, m := range memories {
@@ -55,7 +61,7 @@ var listCmd = &cobra.Command{
 				preview,
 			)
 		}
-		fmt.Printf("\nTotal: %d memories\n", len(memories))
+		fmt.Printf("\nShowing %d of %d memories\n", len(memories), total)
 		return nil
 	},
 }

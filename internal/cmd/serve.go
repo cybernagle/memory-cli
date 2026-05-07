@@ -10,6 +10,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/cybernagle/memory-cli/internal/config"
 	"github.com/cybernagle/memory-cli/internal/daemon"
 )
 
@@ -27,6 +28,21 @@ var serveCmd = &cobra.Command{
 		if err != nil {
 			return fmt.Errorf("invalid interval: %w", err)
 		}
+
+		cfg, _ := config.Load(cfgPath)
+		lockPath := cfg.Storage.Root + "/.daemon.lock"
+		lockFile, err := os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0644)
+		if err != nil {
+			if os.IsExist(err) {
+				return fmt.Errorf("daemon already running (lock file: %s); remove %s if stale", lockPath, lockPath)
+			}
+			return fmt.Errorf("create lock file: %w", err)
+		}
+		defer func() {
+			lockFile.Close()
+			os.Remove(lockPath)
+		}()
+		lockFile.WriteString(fmt.Sprintf("%d\n", os.Getpid()))
 
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
