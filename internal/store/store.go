@@ -1,6 +1,7 @@
 package store
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"log"
 	"os"
@@ -48,15 +49,16 @@ func (s *Store) dirForType(t MemoryType) string {
 func (s *Store) Write(content string, memType MemoryType, scope string, tags []string, source string) (*Memory, error) {
 	now := time.Now()
 	mem := &Memory{
-		ID:        uuid.New().String(),
-		Content:   content,
-		Type:      memType,
-		Scope:     defaultString(scope, "global"),
-		Tags:      tags,
-		Source:    defaultString(source, "manual"),
-		CreatedAt: now,
-		UpdatedAt: now,
-		Version:   1,
+		ID:          uuid.New().String(),
+		Content:     content,
+		ContentHash: hashContent(content),
+		Type:        memType,
+		Scope:       defaultString(scope, "global"),
+		Tags:        tags,
+		Source:      defaultString(source, "manual"),
+		CreatedAt:   now,
+		UpdatedAt:   now,
+		Version:     1,
 	}
 	if memType == ShortTerm {
 		ttl, err := parseDuration(s.cfg.Storage.ShortTermTTL)
@@ -78,6 +80,9 @@ func (s *Store) Read(id string) (*Memory, error) {
 		return nil, err
 	}
 	mem.AccessCount++
+	if err := s.writeToFile(mem); err != nil {
+		return nil, err
+	}
 	return mem, nil
 }
 
@@ -186,6 +191,7 @@ func (s *Store) Upgrade(id string) error {
 		return err
 	}
 	if err := s.writeToFile(mem); err != nil {
+		os.Rename(newPath, oldPath)
 		return err
 	}
 	return nil
@@ -208,6 +214,7 @@ func (s *Store) filePath(mem *Memory) string {
 
 type frontmatter struct {
 	ID          string     `yaml:"id"`
+	ContentHash string     `yaml:"content_hash"`
 	Type        MemoryType `yaml:"type"`
 	Scope       string     `yaml:"scope"`
 	Tags        []string   `yaml:"tags,omitempty"`
@@ -228,6 +235,7 @@ func (s *Store) writeToFile(mem *Memory) error {
 
 	fm := frontmatter{
 		ID:          mem.ID,
+		ContentHash: mem.ContentHash,
 		Type:        mem.Type,
 		Scope:       mem.Scope,
 		Tags:        mem.Tags,
@@ -288,6 +296,24 @@ func defaultString(val, def string) string {
 		return def
 	}
 	return val
+}
+
+func hashContent(content string) string {
+	h := sha256.Sum256([]byte(content))
+	return fmt.Sprintf("%x", h)
+}
+
+func (s *Store) FindByHash(hash string) (*Memory, error) {
+	memories, err := s.List(ListOptions{})
+	if err != nil {
+		return nil, err
+	}
+	for _, mem := range memories {
+		if mem.ContentHash == hash {
+			return mem, nil
+		}
+	}
+	return nil, nil
 }
 
 func parseDuration(s string) (time.Duration, error) {

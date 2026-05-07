@@ -26,7 +26,7 @@ func Execute() {
 }
 
 func init() {
-	home, _ := os.UserHomeDir()
+	home := config.MustHomeDir()
 	rootCmd.PersistentFlags().StringVar(&cfgPath, "config", filepath.Join(home, ".memory", "config.yaml"), "config file path")
 }
 

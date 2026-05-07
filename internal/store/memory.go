@@ -14,6 +14,7 @@ const (
 type Memory struct {
 	ID          string     `yaml:"id" json:"id"`
 	Content     string     `yaml:"content" json:"content"`
+	ContentHash string     `yaml:"content_hash" json:"content_hash"`
 	Type        MemoryType `yaml:"type" json:"type"`
 	Scope       string     `yaml:"scope" json:"scope"`
 	Tags        []string   `yaml:"tags" json:"tags"`

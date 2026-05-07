@@ -29,7 +29,10 @@ var serveCmd = &cobra.Command{
 			return fmt.Errorf("invalid interval: %w", err)
 		}
 
-		cfg, _ := config.Load(cfgPath)
+		cfg, err := config.Load(cfgPath)
+		if err != nil {
+			return fmt.Errorf("load config: %w", err)
+		}
 		lockPath := cfg.Storage.Root + "/.daemon.lock"
 		lockFile, err := os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0644)
 		if err != nil {

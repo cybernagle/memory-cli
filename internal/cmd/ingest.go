@@ -11,7 +11,6 @@ import (
 
 	"github.com/cybernagle/memory-cli/internal/config"
 	"github.com/cybernagle/memory-cli/internal/ingest"
-	"github.com/cybernagle/memory-cli/internal/store"
 )
 
 var ingestSource string
@@ -43,8 +42,9 @@ var ingestCmd = &cobra.Command{
 			}
 			count := 0
 			for _, mem := range memories {
-				existing, _ := s.Search(store.SearchOptions{Query: contentHash(mem.Content), Scope: mem.Scope})
-				if len(existing) > 0 {
+				hash := contentHash(mem.Content)
+				existing, _ := s.FindByHash(hash)
+				if existing != nil {
 					continue
 				}
 				if _, err := s.Write(mem.Content, mem.Type, mem.Scope, mem.Tags, mem.Source); err != nil {
@@ -87,5 +87,5 @@ func parseSources(source string) []string {
 
 func contentHash(content string) string {
 	h := sha256.Sum256([]byte(content))
-	return fmt.Sprintf("%x", h[:8])
+	return fmt.Sprintf("%x", h)
 }

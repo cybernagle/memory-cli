@@ -428,11 +428,10 @@ func TestParseDurationInvalid(t *testing.T) {
 	}
 }
 
-func TestReadDoesNotRewriteFile(t *testing.T) {
+func TestReadPersistsAccessCount(t *testing.T) {
 	s, _ := tempStore(t)
 
 	mem := mustWrite(t, s, "test", LongTerm, "global", nil, "manual")
-	originalModTime := fileModTime(t, s.filePath(mem))
 
 	got, err := s.Read(mem.ID)
 	if err != nil {
@@ -442,9 +441,51 @@ func TestReadDoesNotRewriteFile(t *testing.T) {
 		t.Fatalf("expected access_count=1, got %d", got.AccessCount)
 	}
 
-	newModTime := fileModTime(t, s.filePath(mem))
-	if !newModTime.Equal(originalModTime) {
-		t.Fatal("Read() should not rewrite the file")
+	got2, err := s.Read(mem.ID)
+	if err != nil {
+		t.Fatalf("read2: %v", err)
+	}
+	if got2.AccessCount != 2 {
+		t.Fatalf("expected access_count=2, got %d", got2.AccessCount)
+	}
+}
+
+func TestContentHashPersisted(t *testing.T) {
+	s, _ := tempStore(t)
+
+	mem := mustWrite(t, s, "hello world", LongTerm, "global", nil, "manual")
+	if mem.ContentHash == "" {
+		t.Fatal("expected ContentHash to be set")
+	}
+
+	got, err := s.Read(mem.ID)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if got.ContentHash != mem.ContentHash {
+		t.Fatalf("ContentHash mismatch: expected %s, got %s", mem.ContentHash, got.ContentHash)
+	}
+}
+
+func TestFindByHash(t *testing.T) {
+	s, _ := tempStore(t)
+
+	mem := mustWrite(t, s, "unique content", LongTerm, "global", nil, "manual")
+
+	found, err := s.FindByHash(mem.ContentHash)
+	if err != nil {
+		t.Fatalf("FindByHash: %v", err)
+	}
+	if found == nil {
+		t.Fatal("expected to find memory by hash")
+	}
+	if found.ID != mem.ID {
+		t.Fatalf("wrong memory: expected %s, got %s", mem.ID, found.ID)
+	}
+
+	notFound, _ := s.FindByHash("nonexistent-hash")
+	if notFound != nil {
+		t.Fatal("expected nil for non-existent hash")
 	}
 }
 

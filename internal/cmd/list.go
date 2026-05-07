@@ -47,10 +47,7 @@ var listCmd = &cobra.Command{
 		fmt.Printf("%-8s %-6s %-10s %-10s %-20s %s\n", "ID", "Type", "Scope", "Source", "Created", "Preview")
 		fmt.Println(strings.Repeat("-", 80))
 		for _, m := range memories {
-			preview := m.Content
-			if len(preview) > 40 {
-				preview = preview[:40] + "..."
-			}
+			preview := truncateRunes(m.Content, 40)
 			preview = strings.ReplaceAll(preview, "\n", " ")
 			fmt.Printf("%-8s %-6s %-10s %-10s %-20s %s\n",
 				m.ID,
@@ -72,4 +69,12 @@ func init() {
 	listCmd.Flags().StringVar(&listSource, "source", "", "Filter by source")
 	listCmd.Flags().IntVar(&listLimit, "limit", 50, "Max results")
 	rootCmd.AddCommand(listCmd)
+}
+
+func truncateRunes(s string, maxRunes int) string {
+	runes := []rune(s)
+	if len(runes) <= maxRunes {
+		return s
+	}
+	return string(runes[:maxRunes]) + "..."
 }

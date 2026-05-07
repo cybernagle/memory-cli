@@ -61,10 +61,7 @@ var searchCmd = &cobra.Command{
 			return nil
 		}
 		for _, m := range memories {
-			preview := m.Content
-			if len(preview) > 80 {
-				preview = preview[:80] + "..."
-			}
+			preview := truncateRunes(m.Content, 80)
 			preview = strings.ReplaceAll(preview, "\n", " ")
 			fmt.Printf("%-8s %-6s %-10s %s\n", m.ID, m.Type, m.Scope, preview)
 		}

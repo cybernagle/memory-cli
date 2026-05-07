@@ -25,8 +25,8 @@ func New(s *store.Store, interval time.Duration) *Daemon {
 		interval: interval,
 		tasks: []Task{
 			&ExpireTask{},
-			&DecayTask{},
-			&UpgradeTask{},
+			&DecayTask{Threshold: 30 * 24 * time.Hour},
+			&UpgradeTask{Threshold: 3},
 			&ConsolidateTask{},
 		},
 	}
@@ -67,8 +67,8 @@ func RunOnce(s *store.Store) map[string]int {
 	results := make(map[string]int)
 	tasks := []Task{
 		&ExpireTask{},
-		&DecayTask{},
-		&UpgradeTask{},
+		&DecayTask{Threshold: 30 * 24 * time.Hour},
+		&UpgradeTask{Threshold: 3},
 		&ConsolidateTask{},
 	}
 	for _, task := range tasks {
