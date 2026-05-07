@@ -24,7 +24,7 @@ func (s *Store) Search(opts SearchOptions) ([]*Memory, error) {
 	var results []*Memory
 
 	for _, mem := range all {
-		if opts.Query != "" && !strings.Contains(strings.ToLower(mem.Content), queryLower) && !strings.Contains(strings.ToLower(mem.ID), queryLower) {
+		if opts.Query != "" && !strings.Contains(strings.ToLower(mem.Content), queryLower) {
 			continue
 		}
 		if len(opts.Tags) > 0 && !hasAllTags(mem.Tags, opts.Tags) {

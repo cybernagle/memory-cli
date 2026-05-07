@@ -31,6 +31,9 @@ var writeCmd = &cobra.Command{
 			tags = strings.Split(writeTags, ",")
 		}
 		memType := store.MemoryType(writeType)
+		if writeType != "" && memType != store.ShortTerm && memType != store.LongTerm {
+			return fmt.Errorf("invalid type %q: must be 'short' or 'long'", writeType)
+		}
 		if memType == "" {
 			memType = store.LongTerm
 		}

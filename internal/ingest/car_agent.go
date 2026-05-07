@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/cybernagle/memory-cli/internal/config"
 	"github.com/cybernagle/memory-cli/internal/store"
 )
 
@@ -16,8 +17,7 @@ func (a *CarAgentAdapter) Name() string { return "car-agent" }
 
 func (a *CarAgentAdapter) Ingest() ([]*store.Memory, error) {
 	if a.Path == "" {
-		home, _ := os.UserHomeDir()
-		a.Path = filepath.Join(home, ".car-agent")
+		a.Path = filepath.Join(config.MustHomeDir(), ".car-agent")
 	}
 	if _, err := os.Stat(a.Path); os.IsNotExist(err) {
 		return nil, nil

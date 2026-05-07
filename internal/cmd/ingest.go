@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -8,6 +9,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/cybernagle/memory-cli/internal/config"
 	"github.com/cybernagle/memory-cli/internal/ingest"
 	"github.com/cybernagle/memory-cli/internal/store"
 )
@@ -41,7 +43,7 @@ var ingestCmd = &cobra.Command{
 			}
 			count := 0
 			for _, mem := range memories {
-				existing, _ := s.Search(store.SearchOptions{Query: mem.Content[:min(50, len(mem.Content))], Scope: mem.Scope})
+				existing, _ := s.Search(store.SearchOptions{Query: contentHash(mem.Content), Scope: mem.Scope})
 				if len(existing) > 0 {
 					continue
 				}
@@ -66,7 +68,7 @@ func init() {
 }
 
 func getAdapters(customPath string) map[string]ingest.Adapter {
-	home, _ := os.UserHomeDir()
+	home := config.MustHomeDir()
 	return map[string]ingest.Adapter{
 		"claude":      &ingest.ClaudeAdapter{Path: filepath.Join(home, ".claude")},
 		"car-agent":   &ingest.CarAgentAdapter{Path: filepath.Join(home, ".car-agent")},
@@ -83,9 +85,7 @@ func parseSources(source string) []string {
 	return strings.Split(source, ",")
 }
 
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
+func contentHash(content string) string {
+	h := sha256.Sum256([]byte(content))
+	return fmt.Sprintf("%x", h[:8])
 }

@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/cybernagle/memory-cli/internal/config"
 	"github.com/cybernagle/memory-cli/internal/store"
 )
 
@@ -16,8 +17,7 @@ func (a *ClaudeAdapter) Name() string { return "claude" }
 
 func (a *ClaudeAdapter) Ingest() ([]*store.Memory, error) {
 	if a.Path == "" {
-		home, _ := os.UserHomeDir()
-		a.Path = filepath.Join(home, ".claude")
+		a.Path = filepath.Join(config.MustHomeDir(), ".claude")
 	}
 	if _, err := os.Stat(a.Path); os.IsNotExist(err) {
 		return nil, nil

@@ -2,8 +2,10 @@ package store
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -46,7 +48,7 @@ func (s *Store) dirForType(t MemoryType) string {
 func (s *Store) Write(content string, memType MemoryType, scope string, tags []string, source string) (*Memory, error) {
 	now := time.Now()
 	mem := &Memory{
-		ID:        uuid.New().String()[:8],
+		ID:        uuid.New().String(),
 		Content:   content,
 		Type:      memType,
 		Scope:     defaultString(scope, "global"),
@@ -57,7 +59,10 @@ func (s *Store) Write(content string, memType MemoryType, scope string, tags []s
 		Version:   1,
 	}
 	if memType == ShortTerm {
-		ttl, _ := time.ParseDuration(s.cfg.Storage.ShortTermTTL)
+		ttl, err := parseDuration(s.cfg.Storage.ShortTermTTL)
+		if err != nil {
+			return nil, fmt.Errorf("invalid short_term_ttl %q: %w", s.cfg.Storage.ShortTermTTL, err)
+		}
 		expires := now.Add(ttl)
 		mem.ExpiresAt = &expires
 	}
@@ -118,6 +123,7 @@ func (s *Store) List(opts ListOptions) ([]*Memory, error) {
 			}
 			mem, err := s.readFromFile(filepath.Join(dir, entry.Name()))
 			if err != nil {
+				log.Printf("warning: skipping corrupted file %s: %v", entry.Name(), err)
 				continue
 			}
 			if opts.Scope != "" && mem.Scope != opts.Scope {
@@ -175,10 +181,18 @@ func (s *Store) Upgrade(id string) error {
 	mem.Type = LongTerm
 	mem.ExpiresAt = nil
 	mem.UpdatedAt = time.Now()
+	newDir := s.dirForType(LongTerm)
+	if err := os.MkdirAll(newDir, 0755); err != nil {
+		return err
+	}
+	newPath := filepath.Join(newDir, mem.ID+".md")
+	if err := os.Rename(oldPath, newPath); err != nil {
+		return err
+	}
 	if err := s.writeToFile(mem); err != nil {
 		return err
 	}
-	return os.Remove(oldPath)
+	return nil
 }
 
 func (s *Store) findByID(id string) (*Memory, error) {
@@ -250,15 +264,17 @@ func (s *Store) readFromFile(path string) (*Memory, error) {
 		return nil, err
 	}
 	content := string(data)
-	if !strings.HasPrefix(content, frontMatterSeparator+"\n") {
+	sep := frontMatterSeparator + "\n"
+	if !strings.HasPrefix(content, sep) {
 		return nil, fmt.Errorf("invalid frontmatter in %s", path)
 	}
-	end := strings.Index(content[len(frontMatterSeparator)+1:], frontMatterSeparator)
+	rest := content[len(sep):]
+	end := strings.Index(rest, "\n"+frontMatterSeparator+"\n")
 	if end == -1 {
 		return nil, fmt.Errorf("unclosed frontmatter in %s", path)
 	}
-	fm := content[len(frontMatterSeparator)+1 : len(frontMatterSeparator)+1+end]
-	body := content[len(frontMatterSeparator)+1+end+len(frontMatterSeparator):]
+	fm := rest[:end]
+	body := rest[end+len("\n"+frontMatterSeparator+"\n"):]
 	body = strings.Trim(body, "\n")
 
 	var mem Memory
@@ -274,4 +290,15 @@ func defaultString(val, def string) string {
 		return def
 	}
 	return val
+}
+
+func parseDuration(s string) (time.Duration, error) {
+	if strings.HasSuffix(s, "d") {
+		days, err := strconv.Atoi(strings.TrimSuffix(s, "d"))
+		if err != nil {
+			return 0, fmt.Errorf("invalid day duration: %q", s)
+		}
+		return time.Duration(days) * 24 * time.Hour, nil
+	}
+	return time.ParseDuration(s)
 }

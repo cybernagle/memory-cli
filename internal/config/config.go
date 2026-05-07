@@ -1,11 +1,20 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 
 	"gopkg.in/yaml.v3"
 )
+
+func MustHomeDir() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		panic(fmt.Sprintf("cannot determine home directory: %v", err))
+	}
+	return home
+}
 
 type StorageConfig struct {
 	Root         string `yaml:"root"`
@@ -33,7 +42,7 @@ type Config struct {
 }
 
 func DefaultConfig() *Config {
-	home, _ := os.UserHomeDir()
+	home := MustHomeDir()
 	return &Config{
 		Storage: StorageConfig{
 			Root:         filepath.Join(home, ".memory"),

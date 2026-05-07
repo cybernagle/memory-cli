@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/cybernagle/memory-cli/internal/config"
 	"github.com/cybernagle/memory-cli/internal/store"
 )
 
@@ -16,8 +17,7 @@ func (a *FingersaverAdapter) Name() string { return "fingersaver" }
 
 func (a *FingersaverAdapter) Ingest() ([]*store.Memory, error) {
 	if a.Path == "" {
-		home, _ := os.UserHomeDir()
-		a.Path = filepath.Join(home, ".fingersaver")
+		a.Path = filepath.Join(config.MustHomeDir(), ".fingersaver")
 	}
 	if _, err := os.Stat(a.Path); os.IsNotExist(err) {
 		return nil, nil

@@ -2,7 +2,9 @@ package cmd
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 
 	"github.com/spf13/cobra"
@@ -37,7 +39,10 @@ var importCmd = &cobra.Command{
 		for {
 			var mem store.Memory
 			if err := dec.Decode(&mem); err != nil {
-				break
+				if errors.Is(err, io.EOF) {
+					break
+				}
+				return fmt.Errorf("malformed JSON at record %d: %w", count+1, err)
 			}
 			if _, err := s.Write(mem.Content, mem.Type, mem.Scope, mem.Tags, mem.Source); err != nil {
 				fmt.Fprintf(os.Stderr, "Error importing memory: %v\n", err)

@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/cybernagle/memory-cli/internal/config"
 	"github.com/cybernagle/memory-cli/internal/store"
 )
 
@@ -19,8 +20,7 @@ var wikiLinkRe = regexp.MustCompile(`\[\[([^\]]+)\]\]`)
 
 func (a *LogseqAdapter) Ingest() ([]*store.Memory, error) {
 	if a.Path == "" {
-		home, _ := os.UserHomeDir()
-		a.Path = filepath.Join(home, "logseq")
+		a.Path = filepath.Join(config.MustHomeDir(), "logseq")
 	}
 	if _, err := os.Stat(a.Path); os.IsNotExist(err) {
 		return nil, nil
