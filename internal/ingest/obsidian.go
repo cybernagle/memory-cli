@@ -61,11 +61,12 @@ func (a *ObsidianAdapter) Ingest() ([]*store.Memory, error) {
 		allTags = append(allTags, tags...)
 
 		memories = append(memories, &store.Memory{
-			Content: truncate(body, 10000),
-			Type:    store.LongTerm,
-			Scope:   "global",
-			Tags:    uniqueTags(allTags),
-			Source:  "obsidian",
+			Content:  truncate(body, 10000),
+			Phase:    store.PhaseOrganized,
+			Category: store.CategoryKnowledge,
+			Scope:    "global",
+			Tags:     uniqueTags(allTags),
+			Source:   "obsidian",
 		})
 		return nil
 	})

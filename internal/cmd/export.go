@@ -25,8 +25,8 @@ var exportCmd = &cobra.Command{
 			return err
 		}
 		opts := store.ListOptions{
-			Type:  store.MemoryType(exportType),
-			Scope: exportScope,
+			Category: store.Category(exportType),
+			Scope:    exportScope,
 		}
 		memories, err := s.List(opts)
 		if err != nil {
@@ -63,7 +63,7 @@ var exportCmd = &cobra.Command{
 
 func init() {
 	exportCmd.Flags().StringVar(&exportOutput, "output", "", "Output file (default: stdout)")
-	exportCmd.Flags().StringVar(&exportType, "type", "", "Filter by type: short or long")
+	exportCmd.Flags().StringVar(&exportType, "category", "", "Filter by category")
 	exportCmd.Flags().StringVar(&exportScope, "scope", "", "Filter by scope")
 	rootCmd.AddCommand(exportCmd)
 }

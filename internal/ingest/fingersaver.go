@@ -29,11 +29,12 @@ func (a *FingersaverAdapter) Ingest() ([]*store.Memory, error) {
 		content := strings.TrimSpace(string(data))
 		if content != "" {
 			memories = append(memories, &store.Memory{
-				Content: truncate(content, 5000),
-				Type:    store.ShortTerm,
-				Scope:   "global",
-				Tags:    []string{"fingersaver", "chat"},
-				Source:  "fingersaver",
+				Content:  truncate(content, 5000),
+				Phase:    store.PhaseInbox,
+				Category: store.CategoryInbox,
+				Scope:    "global",
+				Tags:     []string{"fingersaver", "chat"},
+				Source:   "fingersaver",
 			})
 		}
 	}

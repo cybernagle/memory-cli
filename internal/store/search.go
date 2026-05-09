@@ -9,13 +9,13 @@ type SearchOptions struct {
 	Query string
 	Tags  []string
 	Scope string
-	Type  MemoryType
+	Phase Phase
 	From  *time.Time
 	To    *time.Time
 }
 
 func (s *Store) Search(opts SearchOptions) ([]*Memory, error) {
-	all, err := s.List(ListOptions{Type: opts.Type, Scope: opts.Scope})
+	all, err := s.List(ListOptions{Phase: opts.Phase, Scope: opts.Scope})
 	if err != nil {
 		return nil, err
 	}

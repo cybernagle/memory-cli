@@ -11,6 +11,7 @@ import (
 
 	"github.com/cybernagle/memory-cli/internal/config"
 	"github.com/cybernagle/memory-cli/internal/ingest"
+	"github.com/cybernagle/memory-cli/internal/store"
 )
 
 var ingestSource string
@@ -51,7 +52,7 @@ var ingestCmd = &cobra.Command{
 				if existing != nil {
 					continue
 				}
-				if _, err := s.Write(mem.Content, mem.Type, mem.Scope, mem.Tags, mem.Source); err != nil {
+				if _, err := s.Write(mem.Content, store.PhaseOrganized, store.CategoryInbox, mem.Scope, mem.Tags, mem.Source); err != nil {
 					fmt.Fprintf(os.Stderr, "Error writing memory from %s: %v\n", name, err)
 					continue
 				}

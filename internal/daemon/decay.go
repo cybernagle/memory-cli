@@ -18,7 +18,7 @@ func (t *DecayTask) Run(s *store.Store) (int, error) {
 		threshold = 30 * 24 * time.Hour
 	}
 
-	memories, err := s.List(store.ListOptions{Type: store.LongTerm})
+	memories, err := s.List(store.ListOptions{Phase: store.PhaseOrganized})
 	if err != nil {
 		return 0, err
 	}

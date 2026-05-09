@@ -4,18 +4,44 @@ import (
 	"time"
 )
 
-type MemoryType string
+type Phase string
 
 const (
-	ShortTerm MemoryType = "short"
-	LongTerm  MemoryType = "long"
+	PhaseInbox     Phase = "inbox"
+	PhaseOrganized Phase = "organized"
 )
+
+type Category string
+
+const (
+	CategorySoul        Category = "soul"
+	CategoryCharacter   Category = "character"
+	CategoryPeople      Category = "people"
+	CategoryProject     Category = "project"
+	CategoryDate        Category = "date"
+	CategoryKnowledge   Category = "knowledge"
+	CategoryFeedback    Category = "feedback"
+	CategoryPreferences Category = "preferences"
+	CategoryDecisions   Category = "decisions"
+	CategoryLessons     Category = "lessons"
+	CategoryHabits      Category = "habits"
+	CategorySkills      Category = "skills"
+	CategoryInbox       Category = "inbox"
+	CategoryReminders   Category = "reminders"
+)
+
+var AllCategories = []Category{
+	CategorySoul, CategoryCharacter, CategoryPeople, CategoryProject,
+	CategoryDate, CategoryKnowledge, CategoryFeedback, CategoryPreferences,
+	CategoryDecisions, CategoryLessons, CategoryHabits, CategorySkills,
+}
 
 type Memory struct {
 	ID          string     `yaml:"id" json:"id"`
 	Content     string     `yaml:"content" json:"content"`
 	ContentHash string     `yaml:"content_hash" json:"content_hash"`
-	Type        MemoryType `yaml:"type" json:"type"`
+	Phase       Phase      `yaml:"phase" json:"phase"`
+	Category    Category   `yaml:"category" json:"category"`
 	Scope       string     `yaml:"scope" json:"scope"`
 	Tags        []string   `yaml:"tags" json:"tags"`
 	Source      string     `yaml:"source" json:"source"`

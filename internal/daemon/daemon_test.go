@@ -26,7 +26,7 @@ func tempStore(t *testing.T) *store.Store {
 func TestExpireTask(t *testing.T) {
 	s := tempStore(t)
 
-	mem, err := s.Write("should expire", store.ShortTerm, "global", nil, "manual")
+	mem, err := s.Write("should expire", store.PhaseInbox, store.CategoryInbox, "global", nil, "manual")
 	if err != nil {
 		t.Fatalf("write: %v", err)
 	}
@@ -46,10 +46,10 @@ func TestExpireTask(t *testing.T) {
 	}
 }
 
-func TestExpireTaskDoesNotRemoveLongTerm(t *testing.T) {
+func TestExpireTaskDoesNotRemoveOrganized(t *testing.T) {
 	s := tempStore(t)
 
-	_, err := s.Write("permanent", store.LongTerm, "global", nil, "manual")
+	_, err := s.Write("permanent", store.PhaseOrganized, store.CategoryKnowledge, "global", nil, "manual")
 	if err != nil {
 		t.Fatalf("write: %v", err)
 	}
@@ -67,7 +67,7 @@ func TestExpireTaskDoesNotRemoveLongTerm(t *testing.T) {
 func TestDecayTask(t *testing.T) {
 	s := tempStore(t)
 
-	_, err := s.Write("unused old", store.LongTerm, "global", nil, "manual")
+	_, err := s.Write("unused old", store.PhaseOrganized, store.CategoryKnowledge, "global", nil, "manual")
 	if err != nil {
 		t.Fatalf("write: %v", err)
 	}
@@ -85,11 +85,11 @@ func TestDecayTask(t *testing.T) {
 func TestConsolidateTaskDedup(t *testing.T) {
 	s := tempStore(t)
 
-	_, err := s.Write("duplicate content here", store.LongTerm, "global", nil, "manual")
+	_, err := s.Write("duplicate content here", store.PhaseOrganized, store.CategoryKnowledge, "global", nil, "manual")
 	if err != nil {
 		t.Fatalf("write1: %v", err)
 	}
-	_, err = s.Write("duplicate content here", store.LongTerm, "global", nil, "manual")
+	_, err = s.Write("duplicate content here", store.PhaseOrganized, store.CategoryKnowledge, "global", nil, "manual")
 	if err != nil {
 		t.Fatalf("write2: %v", err)
 	}
@@ -110,10 +110,6 @@ func TestConsolidateTaskDedup(t *testing.T) {
 	if len(memories) != 1 {
 		t.Fatalf("expected 1 memory after consolidate, got %d", len(memories))
 	}
-
-	if len(memories) != 1 {
-		t.Fatalf("expected 1 memory after consolidate, got %d", len(memories))
-	}
 	if memories[0].Content != "duplicate content here" {
 		t.Fatalf("expected content preserved, got %q", memories[0].Content)
 	}
@@ -122,7 +118,7 @@ func TestConsolidateTaskDedup(t *testing.T) {
 func TestRunOnce(t *testing.T) {
 	s := tempStore(t)
 
-	_, err := s.Write("short-lived", store.ShortTerm, "global", nil, "manual")
+	_, err := s.Write("short-lived", store.PhaseInbox, store.CategoryInbox, "global", nil, "manual")
 	if err != nil {
 		t.Fatalf("write: %v", err)
 	}

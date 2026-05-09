@@ -28,40 +28,67 @@ func New(cfg *config.Config) *Store {
 }
 
 func (s *Store) Init() error {
-	for _, dir := range []string{s.cfg.ShortTermDir(), s.cfg.LongTermDir()} {
+	dirs := []string{s.cfg.ShortTermDir(), s.cfg.LongTermDir()}
+	for _, dir := range dirs {
 		if err := os.MkdirAll(dir, 0755); err != nil {
 			return fmt.Errorf("create dir %s: %w", dir, err)
+		}
+	}
+	for _, cat := range append(append(AllCategories, CategoryInbox), CategoryReminders) {
+		dir := s.cfg.CategoryDir(string(cat))
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			return fmt.Errorf("create category dir %s: %w", dir, err)
 		}
 	}
 	return nil
 }
 
-func (s *Store) dirForType(t MemoryType) string {
-	switch t {
-	case ShortTerm:
-		return s.cfg.ShortTermDir()
-	case LongTerm:
-		return s.cfg.LongTermDir()
-	default:
-		return s.cfg.LongTermDir()
-	}
-}
-
-func (s *Store) Write(content string, memType MemoryType, scope string, tags []string, source string) (*Memory, error) {
+func (s *Store) WriteToInbox(content string, scope string, tags []string, source string) (*Memory, error) {
 	now := time.Now()
 	mem := &Memory{
 		ID:          uuid.New().String(),
 		Content:     content,
 		ContentHash: hashContent(content),
-		Type:        memType,
+		Phase:       PhaseInbox,
+		Category:    CategoryInbox,
 		Scope:       defaultString(scope, "global"),
 		Tags:        tags,
 		Source:      defaultString(source, "manual"),
 		CreatedAt:   now,
 		UpdatedAt:   now,
 		Version:     1,
+		Links:       ExtractWikiLinks(content),
 	}
-	if memType == ShortTerm {
+	ttl, err := parseDuration(s.cfg.Storage.ShortTermTTL)
+	if err != nil {
+		ttl = 168 * time.Hour
+	}
+	expires := now.Add(ttl)
+	mem.ExpiresAt = &expires
+
+	if err := s.writeToFile(mem); err != nil {
+		return nil, err
+	}
+	return mem, nil
+}
+
+func (s *Store) Write(content string, memType Phase, category Category, scope string, tags []string, source string) (*Memory, error) {
+	now := time.Now()
+	mem := &Memory{
+		ID:          uuid.New().String(),
+		Content:     content,
+		ContentHash: hashContent(content),
+		Phase:       memType,
+		Category:    category,
+		Scope:       defaultString(scope, "global"),
+		Tags:        tags,
+		Source:      defaultString(source, "manual"),
+		CreatedAt:   now,
+		UpdatedAt:   now,
+		Version:     1,
+		Links:       ExtractWikiLinks(content),
+	}
+	if memType == PhaseInbox {
 		ttl, err := parseDuration(s.cfg.Storage.ShortTermTTL)
 		if err != nil {
 			return nil, fmt.Errorf("invalid short_term_ttl %q: %w", s.cfg.Storage.ShortTermTTL, err)
@@ -97,19 +124,17 @@ func (s *Store) Delete(id string) error {
 }
 
 type ListOptions struct {
-	Type   MemoryType
-	Scope  string
-	Source string
-	Limit  int
+	Phase    Phase
+	Category Category
+	Scope    string
+	Source   string
+	Limit    int
 }
 
 func (s *Store) List(opts ListOptions) ([]*Memory, error) {
 	var memories []*Memory
 
-	dirs := []string{s.cfg.ShortTermDir(), s.cfg.LongTermDir()}
-	if opts.Type != "" {
-		dirs = []string{s.dirForType(opts.Type)}
-	}
+	dirs := s.listDirs(opts)
 
 	for _, dir := range dirs {
 		entries, err := os.ReadDir(dir)
@@ -134,14 +159,33 @@ func (s *Store) List(opts ListOptions) ([]*Memory, error) {
 			if opts.Source != "" && mem.Source != opts.Source {
 				continue
 			}
+			if opts.Phase != "" && mem.Phase != opts.Phase {
+				continue
+			}
 			memories = append(memories, mem)
 		}
 	}
+
+	sort.Slice(memories, func(i, j int) bool {
+		return memories[i].CreatedAt.After(memories[j].CreatedAt)
+	})
 
 	if opts.Limit > 0 && len(memories) > opts.Limit {
 		memories = memories[:opts.Limit]
 	}
 	return memories, nil
+}
+
+func (s *Store) listDirs(opts ListOptions) []string {
+	if opts.Category != "" {
+		dir := s.cfg.CategoryDir(string(opts.Category))
+		return []string{dir}
+	}
+	dirs := []string{s.cfg.ShortTermDir(), s.cfg.LongTermDir()}
+	for _, cat := range append(append(AllCategories, CategoryInbox), CategoryReminders) {
+		dirs = append(dirs, s.cfg.CategoryDir(string(cat)))
+	}
+	return dirs
 }
 
 func (s *Store) Tag(id string, add, remove []string) (*Memory, error) {
@@ -177,14 +221,14 @@ func (s *Store) Upgrade(id string) error {
 	if err != nil {
 		return err
 	}
-	if mem.Type == LongTerm {
+	if mem.Phase == PhaseOrganized {
 		return nil
 	}
 	oldPath := s.filePath(mem)
-	mem.Type = LongTerm
+	mem.Phase = PhaseOrganized
 	mem.ExpiresAt = nil
 	mem.UpdatedAt = time.Now()
-	newDir := s.dirForType(LongTerm)
+	newDir := s.cfg.CategoryDir(string(mem.Category))
 	if err := os.MkdirAll(newDir, 0755); err != nil {
 		return err
 	}
@@ -200,7 +244,7 @@ func (s *Store) Upgrade(id string) error {
 }
 
 func (s *Store) findByID(id string) (*Memory, error) {
-	dirs := []string{s.cfg.ShortTermDir(), s.cfg.LongTermDir()}
+	dirs := s.listDirs(ListOptions{})
 	for _, dir := range dirs {
 		path := filepath.Join(dir, id+".md")
 		if _, err := os.Stat(path); err == nil {
@@ -211,13 +255,26 @@ func (s *Store) findByID(id string) (*Memory, error) {
 }
 
 func (s *Store) filePath(mem *Memory) string {
-	return filepath.Join(s.dirForType(mem.Type), mem.ID+".md")
+	if mem.Category != "" && mem.Category != CategoryInbox {
+		return filepath.Join(s.cfg.CategoryDir(string(mem.Category)), mem.ID+".md")
+	}
+	return filepath.Join(s.dirForPhase(mem.Phase), mem.ID+".md")
+}
+
+func (s *Store) dirForPhase(p Phase) string {
+	switch p {
+	case PhaseInbox:
+		return s.cfg.InboxDir()
+	default:
+		return s.cfg.LongTermDir()
+	}
 }
 
 type frontmatter struct {
 	ID          string     `yaml:"id"`
 	ContentHash string     `yaml:"content_hash"`
-	Type        MemoryType `yaml:"type"`
+	Phase       Phase      `yaml:"phase"`
+	Category    Category   `yaml:"category"`
 	Scope       string     `yaml:"scope"`
 	Tags        []string   `yaml:"tags,omitempty"`
 	Source      string     `yaml:"source"`
@@ -227,10 +284,12 @@ type frontmatter struct {
 	AccessCount int        `yaml:"access_count"`
 	Links       []string   `yaml:"links,omitempty"`
 	Version     int        `yaml:"version"`
+	// Legacy fields for backward compat
+	Type string `yaml:"type,omitempty"`
 }
 
 func (s *Store) writeToFile(mem *Memory) error {
-	dir := s.dirForType(mem.Type)
+	dir := s.fileDir(mem)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return err
 	}
@@ -238,7 +297,8 @@ func (s *Store) writeToFile(mem *Memory) error {
 	fm := frontmatter{
 		ID:          mem.ID,
 		ContentHash: mem.ContentHash,
-		Type:        mem.Type,
+		Phase:       mem.Phase,
+		Category:    mem.Category,
 		Scope:       mem.Scope,
 		Tags:        mem.Tags,
 		Source:      mem.Source,
@@ -270,6 +330,13 @@ func (s *Store) writeToFile(mem *Memory) error {
 	return os.Rename(tmpPath, path)
 }
 
+func (s *Store) fileDir(mem *Memory) string {
+	if mem.Category != "" {
+		return s.cfg.CategoryDir(string(mem.Category))
+	}
+	return s.dirForPhase(mem.Phase)
+}
+
 func (s *Store) readFromFile(path string) (*Memory, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -285,16 +352,45 @@ func (s *Store) readFromFile(path string) (*Memory, error) {
 	if end == -1 {
 		return nil, fmt.Errorf("unclosed frontmatter in %s", path)
 	}
-	fm := rest[:end]
+	fmData := rest[:end]
 	body := rest[end+len("\n"+frontMatterSeparator+"\n"):]
 	body = strings.Trim(body, "\n")
 
-	var mem Memory
-	if err := yaml.Unmarshal([]byte(fm), &mem); err != nil {
+	var fm frontmatter
+	if err := yaml.Unmarshal([]byte(fmData), &fm); err != nil {
 		return nil, fmt.Errorf("parse frontmatter: %w", err)
 	}
-	mem.Content = body
-	return &mem, nil
+
+	// Backward compat: legacy "type" field → Phase
+	phase := fm.Phase
+	if phase == "" {
+		switch fm.Type {
+		case "short":
+			phase = PhaseInbox
+		case "long":
+			phase = PhaseOrganized
+		default:
+			phase = PhaseOrganized
+		}
+	}
+
+	mem := &Memory{
+		ID:          fm.ID,
+		Content:     body,
+		ContentHash: fm.ContentHash,
+		Phase:       phase,
+		Category:    fm.Category,
+		Scope:       fm.Scope,
+		Tags:        fm.Tags,
+		Source:      fm.Source,
+		CreatedAt:   fm.CreatedAt,
+		UpdatedAt:   fm.UpdatedAt,
+		ExpiresAt:   fm.ExpiresAt,
+		AccessCount: fm.AccessCount,
+		Links:       fm.Links,
+		Version:     fm.Version,
+	}
+	return mem, nil
 }
 
 func defaultString(val, def string) string {
@@ -331,4 +427,30 @@ func parseDuration(s string) (time.Duration, error) {
 		return time.Duration(days) * 24 * time.Hour, nil
 	}
 	return time.ParseDuration(s)
+}
+
+func ExtractWikiLinks(content string) []string {
+	return extractWikiLinks(content)
+}
+
+func extractWikiLinks(content string) []string {
+	var links []string
+	seen := make(map[string]bool)
+	i := 0
+	for i < len(content)-1 {
+		if content[i] == '[' && content[i+1] == '[' {
+			end := strings.Index(content[i+2:], "]]")
+			if end != -1 {
+				link := strings.TrimSpace(content[i+2 : i+2+end])
+				if link != "" && !seen[link] {
+					seen[link] = true
+					links = append(links, link)
+				}
+				i = i + 2 + end + 2
+				continue
+			}
+		}
+		i++
+	}
+	return links
 }

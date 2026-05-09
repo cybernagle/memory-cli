@@ -18,6 +18,17 @@ func setupTestCmd(t *testing.T) func() {
 
 	origCfgPath := cfgPath
 	cfgPath = cfgFile
+
+	// Reset flags from previous tests
+	writeCategory = ""
+	writeScope = "global"
+	writeSource = "manual"
+	writeTags = ""
+	listCategory = ""
+	listScope = ""
+	listSource = ""
+	listLimit = 50
+
 	return func() {
 		cfgPath = origCfgPath
 	}
@@ -36,12 +47,27 @@ func captureOutput(t *testing.T, fn func()) string {
 	return buf.String()
 }
 
-func extractIDFromList(output string) string {
-	for _, line := range strings.Split(output, "\n") {
-		fields := strings.Fields(line)
-		if len(fields) >= 6 && strings.Contains(fields[0], "-") && (fields[1] == "short" || fields[1] == "long") {
-			return fields[0]
-		}
+// extractIDFromOutput extracts a UUID from output like "Created knowledge/organized memory: abc123-..."
+func extractIDFromOutput(output string) string {
+	parts := strings.Split(output, "memory: ")
+	if len(parts) < 2 {
+		return ""
+	}
+	id := strings.TrimSpace(strings.Split(parts[len(parts)-1], "\n")[0])
+	if len(id) >= 32 && strings.Contains(id, "-") {
+		return id
+	}
+	return ""
+}
+
+func extractInboxIDFromOutput(output string) string {
+	parts := strings.Split(output, "inbox memory: ")
+	if len(parts) < 2 {
+		return ""
+	}
+	id := strings.TrimSpace(strings.Split(parts[len(parts)-1], "\n")[0])
+	if len(id) >= 32 && strings.Contains(id, "-") {
+		return id
 	}
 	return ""
 }
@@ -51,21 +77,16 @@ func TestWriteAndRead(t *testing.T) {
 	defer cleanup()
 
 	output := captureOutput(t, func() {
-		rootCmd.SetArgs([]string{"write", "hello world", "--type", "long"})
+		rootCmd.SetArgs([]string{"write", "hello world", "--category", "knowledge"})
 		rootCmd.Execute()
 	})
-	if !strings.Contains(output, "Created long memory:") {
+	if !strings.Contains(output, "knowledge/organized") {
 		t.Fatalf("unexpected write output: %s", output)
 	}
 
-	output = captureOutput(t, func() {
-		rootCmd.SetArgs([]string{"list"})
-		rootCmd.Execute()
-	})
-
-	id := extractIDFromList(output)
+	id := extractIDFromOutput(output)
 	if id == "" {
-		t.Fatalf("could not find memory ID in list output:\n%s", output)
+		t.Fatalf("could not extract ID from write output: %s", output)
 	}
 
 	output = captureOutput(t, func() {
@@ -77,14 +98,14 @@ func TestWriteAndRead(t *testing.T) {
 	}
 }
 
-func TestWriteInvalidType(t *testing.T) {
+func TestWriteInvalidCategory(t *testing.T) {
 	cleanup := setupTestCmd(t)
 	defer cleanup()
 
-	rootCmd.SetArgs([]string{"write", "test", "--type", "invalid"})
+	rootCmd.SetArgs([]string{"write", "test", "--category", "invalid"})
 	err := rootCmd.Execute()
 	if err == nil {
-		t.Fatal("expected error for invalid type")
+		t.Fatal("expected error for invalid category")
 	}
 }
 
@@ -114,45 +135,28 @@ func TestSearchNoResults(t *testing.T) {
 	}
 }
 
-func TestSearchInvalidType(t *testing.T) {
-	cleanup := setupTestCmd(t)
-	defer cleanup()
-
-	rootCmd.SetArgs([]string{"search", "test", "--type", "bad"})
-	err := rootCmd.Execute()
-	if err == nil {
-		t.Fatal("expected error for invalid search type")
-	}
-}
-
-func TestListTypeFilter(t *testing.T) {
-	cleanup := setupTestCmd(t)
-	defer cleanup()
-
-	rootCmd.SetArgs([]string{"list", "--type", "invalid"})
-	err := rootCmd.Execute()
-	if err == nil {
-		t.Fatal("expected error for invalid list type filter")
-	}
-}
-
-func TestWriteShortAndList(t *testing.T) {
+func TestWriteInboxAndRead(t *testing.T) {
 	cleanup := setupTestCmd(t)
 	defer cleanup()
 
 	output := captureOutput(t, func() {
-		rootCmd.SetArgs([]string{"write", "short-lived note", "--type", "short"})
+		rootCmd.SetArgs([]string{"write", "inbox note"})
 		rootCmd.Execute()
 	})
-	if !strings.Contains(output, "Created short memory:") {
+	if !strings.Contains(output, "Created inbox memory") {
 		t.Fatalf("unexpected write output: %s", output)
 	}
 
+	id := extractInboxIDFromOutput(output)
+	if id == "" {
+		t.Fatalf("could not extract inbox ID from write output: %s", output)
+	}
+
 	output = captureOutput(t, func() {
-		rootCmd.SetArgs([]string{"list", "--type", "short"})
+		rootCmd.SetArgs([]string{"read", id})
 		rootCmd.Execute()
 	})
-	if strings.Contains(output, "No memories found") {
-		t.Fatalf("expected at least one short memory:\n%s", output)
+	if !strings.Contains(output, "inbox note") {
+		t.Fatalf("read output missing content:\n%s", output)
 	}
 }

@@ -20,10 +20,12 @@ var readCmd = &cobra.Command{
 			return err
 		}
 		fmt.Printf("ID:     %s\n", mem.ID)
-		fmt.Printf("Type:   %s\n", mem.Type)
+		fmt.Printf("Phase:   %s\n", mem.Phase)
+		fmt.Printf("Category: %s\n", mem.Category)
 		fmt.Printf("Scope:  %s\n", mem.Scope)
 		fmt.Printf("Source: %s\n", mem.Source)
 		fmt.Printf("Tags:   %v\n", mem.Tags)
+		fmt.Printf("Links:  %v\n", mem.Links)
 		fmt.Printf("Access: %d\n", mem.AccessCount)
 		fmt.Printf("Created: %s\n", mem.CreatedAt.Format("2006-01-02 15:04:05"))
 		fmt.Printf("Updated: %s\n", mem.UpdatedAt.Format("2006-01-02 15:04:05"))

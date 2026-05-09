@@ -35,11 +35,12 @@ func (a *CarAgentAdapter) Ingest() ([]*store.Memory, error) {
 				continue
 			}
 			memories = append(memories, &store.Memory{
-				Content: truncate(content, 5000),
-				Type:    store.LongTerm,
-				Scope:   "global",
-				Tags:    []string{"car-agent"},
-				Source:  "car-agent",
+				Content:  truncate(content, 5000),
+				Phase:    store.PhaseOrganized,
+				Category: store.CategoryKnowledge,
+				Scope:    "global",
+				Tags:     []string{"car-agent"},
+				Source:   "car-agent",
 			})
 		}
 	}

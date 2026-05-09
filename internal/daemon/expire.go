@@ -11,7 +11,7 @@ type ExpireTask struct{}
 func (t *ExpireTask) Name() string { return "expire" }
 
 func (t *ExpireTask) Run(s *store.Store) (int, error) {
-	memories, err := s.List(store.ListOptions{Type: store.ShortTerm})
+	memories, err := s.List(store.ListOptions{Phase: store.PhaseInbox})
 	if err != nil {
 		return 0, err
 	}

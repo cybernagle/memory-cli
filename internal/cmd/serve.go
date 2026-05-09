@@ -14,13 +14,14 @@ import (
 
 	"github.com/cybernagle/memory-cli/internal/config"
 	"github.com/cybernagle/memory-cli/internal/daemon"
+	"github.com/cybernagle/memory-cli/internal/transport"
 )
 
 var serveInterval string
 
 var serveCmd = &cobra.Command{
 	Use:   "serve",
-	Short: "Start the memory processing daemon",
+	Short: "Start the memory processing daemon with Unix socket transport",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		s, err := getStore()
 		if err != nil {
@@ -59,14 +60,29 @@ var serveCmd = &cobra.Command{
 		sigCh := make(chan os.Signal, 1)
 		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
+		// Start daemon
 		d := daemon.New(s, interval, decayThreshold, cfg.Daemon.UpgradeAccess)
 		go func() {
-			<-sigCh
-			fmt.Println("\nShutting down...")
-			cancel()
+			if err := d.Run(ctx); err != nil {
+				fmt.Fprintf(os.Stderr, "daemon error: %v\n", err)
+			}
 		}()
 
-		return d.Run(ctx)
+		// Start Unix socket server
+		socketPath := cfg.Storage.Root + "/memory.sock"
+		srv := transport.NewSocketServer(socketPath, s)
+		go func() {
+			if err := srv.Listen(ctx); err != nil {
+				fmt.Fprintf(os.Stderr, "socket error: %v\n", err)
+			}
+		}()
+
+		fmt.Printf("Memory daemon running (socket: %s, interval: %s)\n", socketPath, interval)
+
+		<-sigCh
+		fmt.Println("\nShutting down...")
+		cancel()
+		return nil
 	},
 }
 

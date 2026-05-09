@@ -53,12 +53,13 @@ func (a *LogseqAdapter) Ingest() ([]*store.Memory, error) {
 			links := extractWikiLinks(content)
 
 			memories = append(memories, &store.Memory{
-				Content: content,
-				Type:    store.LongTerm,
-				Scope:   "global",
-				Tags:    uniqueTags(tags),
-				Links:   links,
-				Source:  "logseq",
+				Content:  content,
+				Phase:    store.PhaseOrganized,
+				Category: store.CategoryKnowledge,
+				Scope:    "global",
+				Tags:     uniqueTags(tags),
+				Links:    links,
+				Source:   "logseq",
 			})
 		}
 	}
@@ -87,11 +88,12 @@ func (a *LogseqAdapter) Ingest() ([]*store.Memory, error) {
 			tags := []string{"logseq", "journal", dateStr}
 
 			memories = append(memories, &store.Memory{
-				Content: content,
-				Type:    store.ShortTerm,
-				Scope:   "global",
-				Tags:    tags,
-				Source:  "logseq",
+				Content:  content,
+				Phase:    store.PhaseInbox,
+				Category: store.CategoryInbox,
+				Scope:    "global",
+				Tags:     tags,
+				Source:   "logseq",
 			})
 		}
 	}

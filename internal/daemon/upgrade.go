@@ -16,7 +16,7 @@ func (t *UpgradeTask) Run(s *store.Store) (int, error) {
 		threshold = 3
 	}
 
-	memories, err := s.List(store.ListOptions{Type: store.ShortTerm})
+	memories, err := s.List(store.ListOptions{Phase: store.PhaseInbox})
 	if err != nil {
 		return 0, err
 	}

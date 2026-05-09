@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -37,10 +38,17 @@ type IngestionConfig struct {
 	Obsidian SourceConfig `yaml:"obsidian"`
 }
 
+type NotificationConfig struct {
+	Enabled bool   `yaml:"enabled"`
+	Method  string `yaml:"method"` // "osascript" | "file"
+}
+
 type Config struct {
-	Storage   StorageConfig   `yaml:"storage"`
-	Daemon    DaemonConfig    `yaml:"daemon"`
-	Ingestion IngestionConfig `yaml:"ingestion"`
+	Storage      StorageConfig      `yaml:"storage"`
+	Daemon       DaemonConfig       `yaml:"daemon"`
+	Ingestion    IngestionConfig    `yaml:"ingestion"`
+	Timezone     string             `yaml:"timezone"`
+	Notification NotificationConfig `yaml:"notification"`
 }
 
 func DefaultConfig() *Config {
@@ -48,12 +56,16 @@ func DefaultConfig() *Config {
 	return &Config{
 		Storage: StorageConfig{
 			Root:         filepath.Join(home, ".memory"),
-			ShortTermTTL: "24h",
+			ShortTermTTL: "168h", // inbox TTL: 7 days
 		},
 		Daemon: DaemonConfig{
 			Interval:       "60s",
 			DecayThreshold: "720h",
 			UpgradeAccess:  3,
+		},
+		Notification: NotificationConfig{
+			Enabled: true,
+			Method:  "osascript",
 		},
 	}
 }
@@ -73,10 +85,43 @@ func Load(path string) (*Config, error) {
 	return cfg, nil
 }
 
+func (c *Config) Location() *time.Location {
+	if c.Timezone != "" {
+		if loc, err := time.LoadLocation(c.Timezone); err == nil {
+			return loc
+		}
+	}
+	return time.Local
+}
+
 func (c *Config) ShortTermDir() string {
 	return filepath.Join(c.Storage.Root, "short-term")
 }
 
 func (c *Config) LongTermDir() string {
 	return filepath.Join(c.Storage.Root, "long-term")
+}
+
+func (c *Config) CategoriesDir() string {
+	return filepath.Join(c.Storage.Root, "categories")
+}
+
+func (c *Config) CategoryDir(cat string) string {
+	return filepath.Join(c.CategoriesDir(), cat)
+}
+
+func (c *Config) InboxDir() string {
+	return c.CategoryDir("inbox")
+}
+
+func (c *Config) RemindersDir() string {
+	return c.CategoryDir("reminders")
+}
+
+func (c *Config) MemoryIndexPath() string {
+	return filepath.Join(c.Storage.Root, "memory.md")
+}
+
+func (c *Config) PendingPath() string {
+	return filepath.Join(c.Storage.Root, "pending.md")
 }

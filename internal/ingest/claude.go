@@ -35,11 +35,12 @@ func (a *ClaudeAdapter) Ingest() ([]*store.Memory, error) {
 				continue
 			}
 			memories = append(memories, &store.Memory{
-				Content: content,
-				Type:    store.LongTerm,
-				Scope:   "global",
-				Tags:    []string{"claude", "instructions"},
-				Source:  "claude",
+				Content:  content,
+				Phase:    store.PhaseOrganized,
+				Category: store.CategoryKnowledge,
+				Scope:    "global",
+				Tags:     []string{"claude", "instructions"},
+				Source:   "claude",
 			})
 		}
 	}
@@ -61,11 +62,12 @@ func (a *ClaudeAdapter) Ingest() ([]*store.Memory, error) {
 					continue
 				}
 				memories = append(memories, &store.Memory{
-					Content: content,
-					Type:    store.LongTerm,
-					Scope:   "global",
-					Tags:    []string{"claude", "project-memory"},
-					Source:  "claude",
+					Content:  content,
+					Phase:    store.PhaseOrganized,
+					Category: store.CategoryKnowledge,
+					Scope:    "global",
+					Tags:     []string{"claude", "project-memory"},
+					Source:   "claude",
 				})
 			}
 		}

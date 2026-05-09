@@ -11,11 +11,11 @@ import (
 )
 
 var (
-	searchTags  string
-	searchScope string
-	searchType  string
-	searchFrom  string
-	searchTo    string
+	searchTags     string
+	searchScope    string
+	searchCategory string
+	searchFrom     string
+	searchTo       string
 )
 
 var searchCmd = &cobra.Command{
@@ -23,9 +23,6 @@ var searchCmd = &cobra.Command{
 	Short: "Search memories by keyword",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		if err := validateType(searchType); err != nil {
-			return err
-		}
 		s, err := getStore()
 		if err != nil {
 			return err
@@ -34,7 +31,6 @@ var searchCmd = &cobra.Command{
 		opts := store.SearchOptions{
 			Query: args[0],
 			Scope: searchScope,
-			Type:  store.MemoryType(searchType),
 		}
 		if searchTags != "" {
 			opts.Tags = strings.Split(searchTags, ",")
@@ -66,7 +62,7 @@ var searchCmd = &cobra.Command{
 		for _, m := range memories {
 			preview := truncateRunes(m.Content, 80)
 			preview = strings.ReplaceAll(preview, "\n", " ")
-			fmt.Printf("%-8s %-6s %-10s %s\n", m.ID, m.Type, m.Scope, preview)
+			fmt.Printf("%-8s %-10s %-10s %s\n", m.ID[:8], m.Phase, m.Category, preview)
 		}
 		fmt.Printf("\nFound: %d memories\n", len(memories))
 		return nil
@@ -76,7 +72,7 @@ var searchCmd = &cobra.Command{
 func init() {
 	searchCmd.Flags().StringVar(&searchTags, "tags", "", "Comma-separated tags to match")
 	searchCmd.Flags().StringVar(&searchScope, "scope", "", "Filter by scope")
-	searchCmd.Flags().StringVar(&searchType, "type", "", "Filter by type: short or long")
+	searchCmd.Flags().StringVar(&searchCategory, "category", "", "Filter by category")
 	searchCmd.Flags().StringVar(&searchFrom, "from", "", "Filter from date (YYYY-MM-DD)")
 	searchCmd.Flags().StringVar(&searchTo, "to", "", "Filter to date inclusive (YYYY-MM-DD)")
 	rootCmd.AddCommand(searchCmd)
