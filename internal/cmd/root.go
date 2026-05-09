@@ -13,6 +13,8 @@ import (
 
 var cfgPath string
 
+var version = "0.0.0"
+
 var rootCmd = &cobra.Command{
 	Use:   "memory",
 	Short: "Unified memory management for AI agents",
@@ -28,6 +30,7 @@ func Execute() {
 func init() {
 	home := config.MustHomeDir()
 	rootCmd.PersistentFlags().StringVar(&cfgPath, "config", filepath.Join(home, ".memory", "config.yaml"), "config file path")
+	rootCmd.Version = version
 }
 
 func getStore() (*store.Store, error) {
