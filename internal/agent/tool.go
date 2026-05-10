@@ -22,9 +22,10 @@ type ToolProperty struct {
 }
 
 type ToolResult struct {
-	Content  string         `json:"content"`
-	IsError  bool           `json:"is_error"`
-	Metadata map[string]any `json:"metadata,omitempty"`
+	Content       string         `json:"content"`
+	IsError       bool           `json:"is_error"`
+	Metadata      map[string]any `json:"metadata,omitempty"`
+	InputRequired bool           `json:"input_required,omitempty"`
 }
 
 type ToolCall struct {
@@ -44,4 +45,8 @@ func ErrResult(msg string) ToolResult {
 
 func OkResult(content string, meta map[string]any) ToolResult {
 	return ToolResult{Content: content, Metadata: meta}
+}
+
+func InputRequiredResult(message string, meta map[string]any) ToolResult {
+	return ToolResult{Content: message, Metadata: meta, InputRequired: true}
 }

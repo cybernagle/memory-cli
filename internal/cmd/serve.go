@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"os"
 	"os/signal"
 	"strconv"
@@ -78,6 +79,24 @@ var serveCmd = &cobra.Command{
 		}()
 
 		fmt.Printf("Memory daemon running (socket: %s, interval: %s)\n", socketPath, interval)
+
+		// Start HTTP API if enabled
+		if cfg.API.Enabled && cfg.API.Listen != "" {
+			httpSrv := transport.NewHTTPServer(cfg.API.Keys, s)
+			go func() {
+				fmt.Printf("Memory API listening on %s\n", cfg.API.Listen)
+				server := &http.Server{
+					Addr:         cfg.API.Listen,
+					Handler:      httpSrv.Handler(),
+					ReadTimeout:  15 * time.Second,
+					WriteTimeout: 30 * time.Second,
+					IdleTimeout:  60 * time.Second,
+				}
+				if err := server.ListenAndServe(); err != nil {
+					fmt.Fprintf(os.Stderr, "API server error: %v\n", err)
+				}
+			}()
+		}
 
 		<-sigCh
 		fmt.Println("\nShutting down...")

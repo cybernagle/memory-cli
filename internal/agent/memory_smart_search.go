@@ -7,6 +7,7 @@ import (
 	"math"
 	"sort"
 	"strings"
+	"time"
 	"unicode"
 
 	"github.com/cybernagle/memory-cli/internal/store"
@@ -26,12 +27,16 @@ func (t *MemorySmartSearchTool) Parameters() ToolSchema {
 	return ToolSchema{
 		Type: "object",
 		Properties: map[string]ToolProperty{
-			"query":    {Type: "string", Description: "Natural language query (Chinese/English). Automatically tokenized for fuzzy matching."},
-			"top":      {Type: "integer", Description: "Return top N results by relevance (default 10)"},
-			"scope":    {Type: "string", Description: "Filter by scope"},
-			"phase":    {Type: "string", Description: "Filter by phase: inbox or organized", Enum: []string{"inbox", "organized"}},
-			"category": {Type: "string", Description: "Filter by category"},
-			"source":   {Type: "string", Description: "Filter by source"},
+			"query":            {Type: "string", Description: "Natural language query (Chinese/English). Automatically tokenized for fuzzy matching."},
+			"top":              {Type: "integer", Description: "Return top N results by relevance (default 10)"},
+			"scope":            {Type: "string", Description: "Filter by scope"},
+			"phase":            {Type: "string", Description: "Filter by phase: inbox or organized", Enum: []string{"inbox", "organized"}},
+			"category":         {Type: "string", Description: "Filter by category"},
+			"source":           {Type: "string", Description: "Filter by source"},
+			"tags":             {Type: "string", Description: "Comma-separated tags (all must match)"},
+			"created_after":    {Type: "string", Description: "ISO 8601 datetime, only memories created after this time"},
+			"created_before":   {Type: "string", Description: "ISO 8601 datetime, only memories created before this time"},
+			"include_related":  {Type: "boolean", Description: "Include memories linked to matched results (default false)"},
 		},
 		Required: []string{"query"},
 	}
@@ -80,6 +85,19 @@ func (t *MemorySmartSearchTool) Execute(ctx context.Context, params map[string]a
 	if v, ok := params["source"].(string); ok {
 		opts.Source = v
 	}
+	if v, ok := params["tags"].(string); ok && v != "" {
+		opts.Tags = strings.Split(v, ",")
+	}
+	if v, ok := params["created_after"].(string); ok && v != "" {
+		if t, err := time.Parse(time.RFC3339, v); err == nil {
+			opts.CreatedAfter = &t
+		}
+	}
+	if v, ok := params["created_before"].(string); ok && v != "" {
+		if t, err := time.Parse(time.RFC3339, v); err == nil {
+			opts.CreatedBefore = &t
+		}
+	}
 
 	all, err := t.store.List(opts)
 	if err != nil {
@@ -91,9 +109,10 @@ func (t *MemorySmartSearchTool) Execute(ctx context.Context, params map[string]a
 		return ErrResult("no valid tokens in query"), nil
 	}
 
+	now := time.Now()
 	var scored []scoredMemory
 	for _, mem := range all {
-		score, matched := scoreMemory(mem, tokens)
+		score, matched := scoreMemory(mem, tokens, now)
 		if score > 0 {
 			scored = append(scored, scoredMemory{Memory: mem, Score: score, Tokens: matched})
 		}
@@ -108,8 +127,10 @@ func (t *MemorySmartSearchTool) Execute(ctx context.Context, params map[string]a
 	}
 
 	results := make([]smartSearchResult, 0, top)
+	matchedIDs := make(map[string]bool)
 	for i := 0; i < top; i++ {
 		mem := scored[i].Memory
+		matchedIDs[mem.ID] = true
 		results = append(results, smartSearchResult{
 			ID:       mem.ID,
 			Content:  mem.Content,
@@ -124,12 +145,55 @@ func (t *MemorySmartSearchTool) Execute(ctx context.Context, params map[string]a
 		})
 	}
 
+	// Related expansion
+	includeRelated := false
+	if v, ok := params["include_related"].(bool); ok {
+		includeRelated = v
+	}
+
+	var related []smartSearchResult
+	if includeRelated {
+		relatedIDs := make(map[string]bool)
+		for id := range matchedIDs {
+			relatedIDs[id] = true
+		}
+		for id := range matchedIDs {
+			mem, err := t.store.FindByID(id)
+			if err != nil {
+				continue
+			}
+			for _, linkID := range mem.Links {
+				if relatedIDs[linkID] {
+					continue
+				}
+				linked, err := t.store.FindByID(linkID)
+				if err != nil {
+					continue
+				}
+				relatedIDs[linkID] = true
+				related = append(related, smartSearchResult{
+					ID:       linked.ID,
+					Content:  linked.Content,
+					Phase:    string(linked.Phase),
+					Category: string(linked.Category),
+					Scope:    linked.Scope,
+					Source:   linked.Source,
+					Tags:     linked.Tags,
+					Score:    0,
+					Matched:  []string{"related"},
+					Preview:  truncateContent(linked.Content, 120),
+				})
+			}
+		}
+	}
+
 	data, _ := json.Marshal(map[string]any{
 		"query":        query,
 		"tokens":       tokens,
 		"total_scored": len(scored),
 		"returned":     len(results),
 		"results":      results,
+		"related":      related,
 	})
 	return OkResult(string(data), map[string]any{"count": len(results)}), nil
 }
@@ -167,7 +231,7 @@ func tokenize(query string) []string {
 	return dedup(tokens)
 }
 
-func scoreMemory(mem *store.Memory, tokens []string) (float64, []string) {
+func scoreMemory(mem *store.Memory, tokens []string, now time.Time) (float64, []string) {
 	content := strings.ToLower(mem.Content)
 	tagsLower := make(map[string]bool)
 	for _, t := range mem.Tags {
@@ -201,6 +265,20 @@ func scoreMemory(mem *store.Memory, tokens []string) (float64, []string) {
 			matchedSet[token] = true
 			matched = append(matched, token)
 		}
+	}
+
+	if score == 0 {
+		return 0, nil
+	}
+
+	// Recency boost: half-life of 7 days
+	ageHours := now.Sub(mem.CreatedAt).Hours()
+	recencyFactor := 1.0 / (1.0 + ageHours/168.0)
+	score *= (1.0 + recencyFactor)
+
+	// Access frequency boost: max 2x
+	if mem.AccessCount > 0 {
+		score *= (1.0 + math.Min(float64(mem.AccessCount)*0.1, 1.0))
 	}
 
 	return score, matched

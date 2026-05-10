@@ -128,11 +128,14 @@ func (s *Store) Delete(id string) error {
 }
 
 type ListOptions struct {
-	Phase    Phase
-	Category Category
-	Scope    string
-	Source   string
-	Limit    int
+	Phase         Phase
+	Category      Category
+	Scope         string
+	Source        string
+	Limit         int
+	CreatedAfter  *time.Time
+	CreatedBefore *time.Time
+	Tags          []string
 }
 
 func (s *Store) List(opts ListOptions) ([]*Memory, error) {
@@ -164,6 +167,15 @@ func (s *Store) List(opts ListOptions) ([]*Memory, error) {
 				continue
 			}
 			if opts.Phase != "" && mem.Phase != opts.Phase {
+				if opts.CreatedAfter != nil && mem.CreatedAt.Before(*opts.CreatedAfter) {
+					continue
+				}
+				if opts.CreatedBefore != nil && !mem.CreatedAt.Before(*opts.CreatedBefore) {
+					continue
+				}
+				if len(opts.Tags) > 0 && !hasAllTags(mem.Tags, opts.Tags) {
+					continue
+				}
 				continue
 			}
 			memories = append(memories, mem)

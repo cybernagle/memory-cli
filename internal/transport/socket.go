@@ -38,6 +38,7 @@ type Response struct {
 	ID     int    `json:"id"`
 	Result any    `json:"result,omitempty"`
 	Error  string `json:"error,omitempty"`
+	Status string `json:"status,omitempty"` // "completed" (default) or "input-required"
 }
 
 func (srv *SocketServer) Listen(ctx context.Context) error {
@@ -105,7 +106,7 @@ func (srv *SocketServer) handleConn(conn net.Conn) {
 func (srv *SocketServer) handleRequest(req *Request) Response {
 	switch req.Method {
 	case "tools/list":
-		return Response{ID: req.ID, Result: srv.agent.ListTools()}
+		return Response{ID: req.ID, Result: srv.agent.ListTools(), Status: "completed"}
 	case "tools/call":
 		toolName, _ := req.Params["name"].(string)
 		params, _ := req.Params["params"].(map[string]any)
@@ -116,14 +117,13 @@ func (srv *SocketServer) handleRequest(req *Request) Response {
 		if err != nil {
 			return Response{ID: req.ID, Error: err.Error()}
 		}
-		return Response{ID: req.ID, Result: result}
+		return resultToResponse(req.ID, result)
 	default:
-		// Try to execute as a tool name directly
 		result, err := srv.agent.Execute(context.Background(), req.Method, req.Params)
 		if err != nil {
 			return Response{ID: req.ID, Error: err.Error()}
 		}
-		return Response{ID: req.ID, Result: result}
+		return resultToResponse(req.ID, result)
 	}
 }
 

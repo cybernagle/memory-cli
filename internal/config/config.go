@@ -43,12 +43,19 @@ type NotificationConfig struct {
 	Method  string `yaml:"method"` // "osascript" | "file"
 }
 
+type APIConfig struct {
+	Enabled bool     `yaml:"enabled"`
+	Keys    []string `yaml:"keys"`
+	Listen  string   `yaml:"listen"`
+}
+
 type Config struct {
 	Storage      StorageConfig      `yaml:"storage"`
 	Daemon       DaemonConfig       `yaml:"daemon"`
 	Ingestion    IngestionConfig    `yaml:"ingestion"`
 	Timezone     string             `yaml:"timezone"`
 	Notification NotificationConfig `yaml:"notification"`
+	API          APIConfig          `yaml:"api"`
 }
 
 func DefaultConfig() *Config {

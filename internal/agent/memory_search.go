@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
+	"time"
 
 	"github.com/cybernagle/memory-cli/internal/store"
 )
@@ -22,11 +24,13 @@ func (t *MemorySearchTool) Parameters() ToolSchema {
 	return ToolSchema{
 		Type: "object",
 		Properties: map[string]ToolProperty{
-			"query":    {Type: "string", Description: "Search keyword"},
-			"tags":     {Type: "string", Description: "Comma-separated tags (all must match)"},
-			"scope":    {Type: "string", Description: "Filter by scope"},
-			"phase":    {Type: "string", Description: "Filter by phase: inbox or organized", Enum: []string{"inbox", "organized"}},
-			"category": {Type: "string", Description: "Filter by category"},
+			"query":          {Type: "string", Description: "Search keyword"},
+			"tags":           {Type: "string", Description: "Comma-separated tags (all must match)"},
+			"scope":          {Type: "string", Description: "Filter by scope"},
+			"phase":          {Type: "string", Description: "Filter by phase: inbox or organized", Enum: []string{"inbox", "organized"}},
+			"category":       {Type: "string", Description: "Filter by category"},
+			"created_after":  {Type: "string", Description: "ISO 8601 datetime, only memories created after this time"},
+			"created_before": {Type: "string", Description: "ISO 8601 datetime, only memories created before this time"},
 		},
 		Required: []string{"query"},
 	}
@@ -45,6 +49,19 @@ func (t *MemorySearchTool) Execute(ctx context.Context, params map[string]any) (
 	}
 	if v, ok := params["scope"].(string); ok {
 		opts.Scope = v
+	}
+	if v, ok := params["tags"].(string); ok && v != "" {
+		opts.Tags = strings.Split(v, ",")
+	}
+	if v, ok := params["created_after"].(string); ok && v != "" {
+		if t, err := time.Parse(time.RFC3339, v); err == nil {
+			opts.From = &t
+		}
+	}
+	if v, ok := params["created_before"].(string); ok && v != "" {
+		if t, err := time.Parse(time.RFC3339, v); err == nil {
+			opts.To = &t
+		}
 	}
 
 	results, err := t.store.Search(opts)
