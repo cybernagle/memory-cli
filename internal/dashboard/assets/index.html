@@ -1,0 +1,614 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Memory Dashboard</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<style>
+:root {
+  --bg: #0f1117;
+  --surface: #1a1d27;
+  --surface2: #242836;
+  --border: #2e3348;
+  --text: #e4e6f0;
+  --text2: #8b8fa8;
+  --primary: #6c8aff;
+  --primary2: #4a6cf7;
+  --green: #4ade80;
+  --orange: #fbbf24;
+  --red: #f87171;
+  --purple: #a78bfa;
+  --cyan: #22d3ee;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  line-height: 1.5;
+}
+a { color: var(--primary); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+.header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 16px 24px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+.header h1 { font-size: 18px; font-weight: 600; }
+.header h1 span { color: var(--primary); }
+
+.search-box {
+  display: flex; align-items: center; gap: 8px;
+  background: var(--surface2); border: 1px solid var(--border);
+  border-radius: 8px; padding: 6px 12px; width: 360px;
+}
+.search-box input {
+  background: none; border: none; color: var(--text); outline: none;
+  font-size: 14px; width: 100%;
+}
+.search-box input::placeholder { color: var(--text2); }
+
+.container { max-width: 1200px; margin: 0 auto; padding: 24px; }
+
+.grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 24px; align-items: start; }
+.grid-full { grid-column: 1 / -1; }
+
+.card {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 10px; padding: 20px;
+}
+.card h2 {
+  font-size: 13px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.5px; color: var(--text2); margin-bottom: 16px;
+}
+
+.stats-row { display: flex; gap: 16px; }
+.stat-box {
+  flex: 1; background: var(--surface2); border-radius: 8px;
+  padding: 16px; text-align: center;
+}
+.stat-box .num { font-size: 32px; font-weight: 700; }
+.stat-box .label { font-size: 12px; color: var(--text2); margin-top: 4px; }
+.stat-inbox .num { color: var(--orange); }
+.stat-organized .num { color: var(--green); }
+.stat-total .num { color: var(--primary); }
+.stat-recent .num { color: var(--cyan); }
+
+.memories-list { display: flex; flex-direction: column; gap: 8px; }
+.mem-card {
+  background: var(--surface2); border-radius: 8px; padding: 12px 16px;
+  cursor: pointer; transition: border-color 0.15s;
+  border: 1px solid transparent;
+}
+.mem-card:hover { border-color: var(--primary); }
+.mem-card.active { border-color: var(--primary); }
+.mem-card .mem-header {
+  display: flex; align-items: center; gap: 8px; margin-bottom: 6px;
+}
+.mem-card .mem-cat {
+  font-size: 11px; font-weight: 600; padding: 2px 8px;
+  border-radius: 4px; background: var(--primary); color: #fff;
+}
+.mem-card .mem-phase {
+  font-size: 11px; padding: 2px 8px; border-radius: 4px;
+  background: var(--surface); color: var(--text2); border: 1px solid var(--border);
+}
+.mem-card .mem-time { font-size: 11px; color: var(--text2); margin-left: auto; }
+.mem-card .mem-content { font-size: 14px; color: var(--text); }
+.mem-card .mem-content.truncated {
+  overflow: hidden; display: -webkit-box;
+  -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+}
+
+.detail-panel {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 10px; padding: 20px; margin-top: 16px;
+  display: none;
+}
+.detail-panel.visible { display: block; }
+.detail-panel .detail-header {
+  display: flex; align-items: center; gap: 12px; margin-bottom: 12px;
+}
+.detail-panel .detail-close {
+  background: none; border: none; color: var(--text2);
+  font-size: 20px; cursor: pointer; padding: 4px 8px;
+}
+.detail-panel .detail-close:hover { color: var(--text); }
+.detail-panel .detail-content {
+  background: var(--surface2); border-radius: 8px; padding: 16px;
+  font-size: 14px; white-space: pre-wrap; word-break: break-word;
+  margin-bottom: 12px; max-height: 300px; overflow-y: auto;
+}
+.detail-meta { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+.detail-tag {
+  font-size: 12px; padding: 3px 10px; border-radius: 12px;
+  background: var(--surface2); color: var(--text2);
+  border: 1px solid var(--border);
+}
+.detail-info { font-size: 13px; color: var(--text2); display: flex; gap: 20px; }
+.detail-info span { display: flex; align-items: center; gap: 4px; }
+.detail-links { margin-top: 12px; }
+.detail-links h3 {
+  font-size: 12px; color: var(--text2); text-transform: uppercase;
+  margin-bottom: 8px; letter-spacing: 0.5px;
+}
+.link-list { display: flex; flex-direction: column; gap: 4px; }
+.link-item {
+  font-size: 13px; padding: 8px 12px; background: var(--surface2);
+  border-radius: 6px; cursor: pointer; color: var(--primary);
+}
+.link-item:hover { background: var(--border); }
+
+.graph-section { margin-top: 24px; }
+.graph-section h2 {
+  font-size: 13px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.5px; color: var(--text2); margin-bottom: 12px;
+}
+.graph-canvas {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 10px; width: 100%; height: 500px;
+}
+
+.filter-bar {
+  display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap;
+}
+.filter-btn {
+  font-size: 12px; padding: 6px 14px; border-radius: 6px;
+  background: var(--surface2); color: var(--text2);
+  border: 1px solid var(--border); cursor: pointer;
+}
+.filter-btn:hover { border-color: var(--primary); color: var(--text); }
+.filter-btn.active { background: var(--primary2); color: #fff; border-color: var(--primary2); }
+
+.empty-state { text-align: center; padding: 40px; color: var(--text2); font-size: 14px; }
+
+.tag-cloud { display: flex; flex-wrap: wrap; gap: 6px; }
+.tag-item {
+  font-size: 12px; padding: 4px 10px; border-radius: 12px;
+  background: var(--surface2); color: var(--text2);
+  border: 1px solid var(--border); cursor: pointer;
+}
+.tag-item:hover { border-color: var(--primary); color: var(--text); }
+.tag-item .tag-count { color: var(--primary); margin-left: 4px; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1><span>Memory</span> Dashboard</h1>
+  <div class="search-box">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+    </svg>
+    <input type="text" id="searchInput" placeholder="Search memories..." />
+  </div>
+</div>
+
+<div class="container">
+  <div class="grid">
+    <div class="card">
+      <h2>Phase Overview</h2>
+      <div class="stats-row">
+        <div class="stat-box stat-inbox">
+          <div class="num" id="inboxCount">-</div>
+          <div class="label">Inbox</div>
+        </div>
+        <div class="stat-box stat-organized">
+          <div class="num" id="organizedCount">-</div>
+          <div class="label">Organized</div>
+        </div>
+        <div class="stat-box stat-total">
+          <div class="num" id="totalCount">-</div>
+          <div class="label">Total</div>
+        </div>
+        <div class="stat-box stat-recent">
+          <div class="num" id="recentCount">-</div>
+          <div class="label">Last 24h</div>
+        </div>
+      </div>
+      <div style="margin-top:16px">
+        <h2>Top Tags</h2>
+        <div class="tag-cloud" id="tagCloud"></div>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Category Distribution</h2>
+      <div style="position:relative;height:260px">
+        <canvas id="categoryChart"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <div class="card grid-full" style="margin-bottom:16px">
+    <h2>Recent Activity</h2>
+    <div class="filter-bar" id="filterBar">
+      <button class="filter-btn active" data-filter="all">All</button>
+      <button class="filter-btn" data-filter="inbox">Inbox</button>
+      <button class="filter-btn" data-filter="organized">Organized</button>
+    </div>
+    <div class="memories-list" id="memoriesList">
+      <div class="empty-state">Loading memories...</div>
+    </div>
+  </div>
+
+  <div class="detail-panel" id="detailPanel">
+    <div class="detail-header">
+      <button class="detail-close" id="detailClose">&times;</button>
+      <span class="mem-cat" id="detailCategory"></span>
+      <span class="mem-phase" id="detailPhase"></span>
+      <span style="font-size:12px;color:var(--text2)" id="detailTime"></span>
+      <span style="font-size:12px;color:var(--text2);margin-left:auto" id="detailAccess"></span>
+    </div>
+    <div class="detail-content" id="detailContent"></div>
+    <div class="detail-meta" id="detailTags"></div>
+    <div class="detail-info" id="detailInfo"></div>
+    <div class="detail-links" id="detailLinks"></div>
+  </div>
+
+  <div class="graph-section" id="graphSection" style="display:none">
+    <h2>Link Graph <span style="font-weight:400;font-size:12px" id="graphStats"></span></h2>
+    <canvas class="graph-canvas" id="graphCanvas"></canvas>
+  </div>
+</div>
+
+<script>
+const API = '';
+let currentFilter = 'all';
+let allMemories = [];
+let categoryChart = null;
+let graphAnimId = null;
+
+const CATEGORY_COLORS = {
+  soul:'#a78bfa', character:'#c084fc', people:'#f472b6', project:'#6c8aff',
+  date:'#fbbf24', knowledge:'#22d3ee', feedback:'#f87171', preferences:'#4ade80',
+  decisions:'#818cf8', lessons:'#fb923c', habits:'#34d399', skills:'#a3e635',
+  inbox:'#9ca3af', reminders:'#f97316'
+};
+
+async function fetchJSON(url) {
+  const r = await fetch(API + url);
+  if (!r.ok) throw new Error('HTTP ' + r.status + ': ' + r.statusText);
+  return r.json();
+}
+
+function timeAgo(dateStr) {
+  const d = new Date(dateStr);
+  const diff = (Date.now() - d.getTime()) / 1000;
+  if (diff < 60) return 'just now';
+  if (diff < 3600) return Math.floor(diff/60) + 'm ago';
+  if (diff < 86400) return Math.floor(diff/3600) + 'h ago';
+  return Math.floor(diff/86400) + 'd ago';
+}
+
+function esc(s) {
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+
+function escAttr(s) {
+  return esc(s).replace(/"/g, '&quot;');
+}
+
+async function loadStats() {
+  const stats = await fetchJSON('/api/stats');
+  document.getElementById('inboxCount').textContent = stats.inbox;
+  document.getElementById('organizedCount').textContent = stats.organized;
+  document.getElementById('totalCount').textContent = stats.total;
+  document.getElementById('recentCount').textContent = stats.recent_24h;
+
+  const tags = Object.entries(stats.tags || {}).sort((a,b) => b[1]-a[1]).slice(0,15);
+  document.getElementById('tagCloud').innerHTML = tags.map(function(t) {
+    return '<span class="tag-item" data-tag="' + escAttr(t[0]) + '">' + esc(t[0]) + '<span class="tag-count">' + t[1] + '</span></span>';
+  }).join('');
+
+  renderChart(stats.categories);
+}
+
+function renderChart(categories) {
+  const labels = Object.keys(categories).filter(k => categories[k] > 0);
+  const data = labels.map(k => categories[k]);
+  const colors = labels.map(k => CATEGORY_COLORS[k] || '#6c8aff');
+
+  if (categoryChart) categoryChart.destroy();
+  categoryChart = new Chart(document.getElementById('categoryChart'), {
+    type: 'bar',
+    data: {
+      labels: labels,
+      datasets: [{
+        data: data,
+        backgroundColor: colors,
+        borderRadius: 4,
+        barThickness: 20
+      }]
+    },
+    options: {
+      indexAxis: 'y',
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: { legend: { display: false }, tooltip: { backgroundColor: '#242836', titleColor: '#e4e6f0', bodyColor: '#e4e6f0', borderColor: '#2e3348', borderWidth: 1 } },
+      scales: {
+        x: { grid: { color: '#2e3348' }, ticks: { color: '#8b8fa8' }, beginAtZero: true },
+        y: { grid: { display: false }, ticks: { color: '#e4e6f0', font: { size: 12 } } }
+      }
+    }
+  });
+}
+
+async function loadMemories() {
+  const data = await fetchJSON('/api/memories?limit=100');
+  allMemories = data.memories || [];
+  renderMemories();
+  if (allMemories.length > 0) loadGraph().catch(function(err) { console.warn('graph:', err); });
+}
+
+function renderMemories(filter) {
+  filter = filter || currentFilter;
+  var mems = allMemories;
+  if (filter !== 'all') mems = mems.filter(function(m) { return m.phase === filter; });
+
+  var list = document.getElementById('memoriesList');
+  if (mems.length === 0) {
+    list.innerHTML = '<div class="empty-state">No memories found</div>';
+    return;
+  }
+
+  mems.sort(function(a,b) { return new Date(b.created_at) - new Date(a.created_at); });
+
+  list.innerHTML = mems.map(function(m) {
+    var content = m.content.length > 120 ? m.content.slice(0,120) + '...' : m.content;
+    var firstLine = content.split('\n')[0];
+    var color = CATEGORY_COLORS[m.category] || '#6c8aff';
+    return '<div class="mem-card" data-id="' + escAttr(m.id) + '">' +
+      '<div class="mem-header">' +
+        '<span class="mem-cat" style="background:' + color + '">' + esc(m.category) + '</span>' +
+        '<span class="mem-phase">' + esc(m.phase) + '</span>' +
+        '<span class="mem-time">' + timeAgo(m.created_at) + '</span>' +
+      '</div>' +
+      '<div class="mem-content truncated">' + esc(firstLine) + '</div>' +
+    '</div>';
+  }).join('');
+}
+
+function setFilter(btn) {
+  document.querySelectorAll('.filter-btn').forEach(function(b) { b.classList.remove('active'); });
+  btn.classList.add('active');
+  currentFilter = btn.dataset.filter;
+  renderMemories();
+}
+
+async function showDetail(id) {
+  var m = await fetchJSON('/api/memories/' + encodeURIComponent(id));
+  var panel = document.getElementById('detailPanel');
+  panel.classList.add('visible');
+
+  var color = CATEGORY_COLORS[m.category] || '#6c8aff';
+  document.getElementById('detailCategory').textContent = m.category;
+  document.getElementById('detailCategory').style.background = color;
+  document.getElementById('detailPhase').textContent = m.phase;
+  document.getElementById('detailTime').textContent = new Date(m.created_at).toLocaleString();
+  document.getElementById('detailAccess').textContent = 'accessed ' + m.access_count;
+  document.getElementById('detailContent').textContent = m.content;
+  document.getElementById('detailTags').innerHTML = (m.tags || []).map(function(t) {
+    return '<span class="detail-tag">' + esc(t) + '</span>';
+  }).join('');
+  document.getElementById('detailInfo').innerHTML =
+    '<span>Source: ' + esc(m.source || 'unknown') + '</span>' +
+    '<span>Links: ' + (m.links || []).length + '</span>';
+
+  try {
+    var links = await fetchJSON('/api/memories/' + encodeURIComponent(id) + '/links');
+    var fwd = links.forward || [];
+    var back = links.backlinks || [];
+    var el = document.getElementById('detailLinks');
+    if (fwd.length === 0 && back.length === 0) {
+      el.innerHTML = '';
+      return;
+    }
+    var html = '<h3>Linked Memories</h3><div class="link-list">';
+    fwd.forEach(function(l) {
+      html += '<div class="link-item" data-id="' + escAttr(l.id) + '">&#8594; ' + esc(l.content.slice(0,80)) + '</div>';
+    });
+    back.forEach(function(l) {
+      html += '<div class="link-item" data-id="' + escAttr(l.id) + '">&#8592; ' + esc(l.content.slice(0,80)) + '</div>';
+    });
+    html += '</div>';
+    el.innerHTML = html;
+  } catch(e) {}
+
+  panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+function closeDetail() {
+  document.getElementById('detailPanel').classList.remove('visible');
+  document.querySelectorAll('.mem-card').forEach(function(c) { c.classList.remove('active'); });
+}
+
+async function searchMemories(query) {
+  if (!query.trim()) { loadMemories(); return; }
+  var data = await fetchJSON('/api/search?q=' + encodeURIComponent(query));
+  var mems = data.results || [];
+  var list = document.getElementById('memoriesList');
+  if (mems.length === 0) {
+    list.innerHTML = '<div class="empty-state">No results for "' + esc(query) + '"</div>';
+    return;
+  }
+  list.innerHTML = mems.map(function(m) {
+    var content = m.content.length > 120 ? m.content.slice(0,120)+'...' : m.content;
+    var firstLine = content.split('\n')[0];
+    var color = CATEGORY_COLORS[m.category] || '#6c8aff';
+    return '<div class="mem-card" data-id="' + escAttr(m.id) + '">' +
+      '<div class="mem-header">' +
+        '<span class="mem-cat" style="background:' + color + '">' + esc(m.category) + '</span>' +
+        '<span class="mem-phase">' + esc(m.phase) + '</span>' +
+        '<span class="mem-time">' + timeAgo(m.created_at) + '</span>' +
+      '</div>' +
+      '<div class="mem-content truncated">' + esc(firstLine) + '</div>' +
+    '</div>';
+  }).join('');
+}
+
+function searchByTag(tag) {
+  document.getElementById('searchInput').value = tag;
+  searchMemories(tag);
+}
+
+document.getElementById('searchInput').addEventListener('keydown', function(e) {
+  if (e.key === 'Enter') searchMemories(e.target.value);
+  if (e.key === 'Escape') { e.target.value = ''; loadMemories(); }
+});
+
+// Event delegation
+document.getElementById('memoriesList').addEventListener('click', function(e) {
+  var card = e.target.closest('.mem-card');
+  if (!card) return;
+  document.querySelectorAll('.mem-card').forEach(function(c) { c.classList.remove('active'); });
+  card.classList.add('active');
+  showDetail(card.dataset.id);
+});
+
+document.getElementById('tagCloud').addEventListener('click', function(e) {
+  var item = e.target.closest('.tag-item');
+  if (item) searchByTag(item.dataset.tag);
+});
+
+document.getElementById('detailLinks').addEventListener('click', function(e) {
+  var item = e.target.closest('.link-item');
+  if (item) showDetail(item.dataset.id);
+});
+
+document.getElementById('filterBar').addEventListener('click', function(e) {
+  var btn = e.target.closest('.filter-btn');
+  if (btn) setFilter(btn);
+});
+
+document.getElementById('detailClose').addEventListener('click', closeDetail);
+
+async function loadGraph() {
+  if (graphAnimId) { cancelAnimationFrame(graphAnimId); graphAnimId = null; }
+  var data = await fetchJSON('/api/graph');
+  var nodes = data.nodes || [];
+  var edges = data.edges || [];
+
+  if (edges.length === 0) return;
+
+  document.getElementById('graphSection').style.display = 'block';
+  document.getElementById('graphStats').textContent = '(' + data.stats + ')';
+
+  var canvas = document.getElementById('graphCanvas');
+  var ctx = canvas.getContext('2d');
+  var rect = canvas.getBoundingClientRect();
+  canvas.width = rect.width * devicePixelRatio;
+  canvas.height = rect.height * devicePixelRatio;
+  ctx.scale(devicePixelRatio, devicePixelRatio);
+
+  var W = rect.width, H = rect.height;
+  var nodeMap = {};
+  var simNodes = [];
+
+  nodes.forEach(function(n) {
+    var x = W/2 + (Math.random()-0.5)*300;
+    var y = H/2 + (Math.random()-0.5)*300;
+    var sn = Object.assign({}, n, { x: x, y: y, vx: 0, vy: 0 });
+    simNodes.push(sn);
+    nodeMap[n.id] = sn;
+  });
+
+  var simEdges = edges.filter(function(e) { return nodeMap[e.source] && nodeMap[e.target]; });
+
+  function tick() {
+    for (var i = 0; i < simNodes.length; i++) {
+      var n = simNodes[i];
+      n.vx *= 0.9; n.vy *= 0.9;
+      n.vx += (W/2 - n.x) * 0.001;
+      n.vy += (H/2 - n.y) * 0.001;
+    }
+    for (var i = 0; i < simNodes.length; i++) {
+      for (var j = i+1; j < simNodes.length; j++) {
+        var a = simNodes[i], b = simNodes[j];
+        var dx = b.x - a.x, dy = b.y - a.y;
+        var d = Math.sqrt(dx*dx + dy*dy) || 1;
+        var f = 2000 / (d*d);
+        var fx = dx/d * f, fy = dy/d * f;
+        a.vx -= fx; a.vy -= fy;
+        b.vx += fx; b.vy += fy;
+      }
+    }
+    for (var i = 0; i < simEdges.length; i++) {
+      var e = simEdges[i];
+      var a = nodeMap[e.source], b = nodeMap[e.target];
+      var dx = b.x - a.x, dy = b.y - a.y;
+      var d = Math.sqrt(dx*dx + dy*dy) || 1;
+      var f = (d - 80) * 0.01;
+      var fx = dx/d * f, fy = dy/d * f;
+      a.vx += fx; a.vy += fy;
+      b.vx -= fx; b.vy -= fy;
+    }
+    for (var i = 0; i < simNodes.length; i++) {
+      var n = simNodes[i];
+      n.x += n.vx; n.y += n.vy;
+      n.x = Math.max(40, Math.min(W-40, n.x));
+      n.y = Math.max(20, Math.min(H-20, n.y));
+    }
+  }
+
+  canvas.addEventListener('click', function(e) {
+    var r = canvas.getBoundingClientRect();
+    var mx = e.clientX - r.left, my = e.clientY - r.top;
+    for (var i = 0; i < simNodes.length; i++) {
+      var n = simNodes[i];
+      if (Math.abs(n.x-mx) < 30 && Math.abs(n.y-my) < 15) {
+        showDetail(n.id);
+        return;
+      }
+    }
+  });
+
+  function draw() {
+    ctx.clearRect(0, 0, W, H);
+    ctx.strokeStyle = '#2e3348';
+    ctx.lineWidth = 1;
+    for (var i = 0; i < simEdges.length; i++) {
+      var e = simEdges[i];
+      var a = nodeMap[e.source], b = nodeMap[e.target];
+      ctx.beginPath();
+      ctx.moveTo(a.x, a.y);
+      ctx.lineTo(b.x, b.y);
+      ctx.stroke();
+    }
+    for (var i = 0; i < simNodes.length; i++) {
+      var n = simNodes[i];
+      var color = CATEGORY_COLORS[n.category] || '#6c8aff';
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.arc(n.x, n.y, n.link_count > 0 ? 6 : 4, 0, Math.PI*2);
+      ctx.fill();
+      if (n.link_count > 0) {
+        ctx.fillStyle = '#8b8fa8';
+        ctx.font = '10px sans-serif';
+        ctx.fillText(n.label.slice(0,20), n.x + 8, n.y + 3);
+      }
+    }
+    tick();
+    graphAnimId = requestAnimationFrame(draw);
+  }
+
+  for (var i = 0; i < 100; i++) tick();
+  draw();
+}
+
+function showErrorState(err) {
+  console.error(err);
+  document.getElementById('memoriesList').innerHTML =
+    '<div class="empty-state">Failed to load data. Check that the server is running.</div>';
+}
+
+// Init
+loadStats().catch(showErrorState);
+loadMemories().catch(showErrorState);
+</script>
+</body>
+</html>

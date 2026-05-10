@@ -2,6 +2,7 @@ package store
 
 import (
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -18,6 +19,9 @@ import (
 )
 
 const frontMatterSeparator = "---"
+
+// ErrNotFound is returned when a memory ID does not exist.
+var ErrNotFound = errors.New("not found")
 
 type Store struct {
 	cfg *config.Config
@@ -251,7 +255,12 @@ func (s *Store) findByID(id string) (*Memory, error) {
 			return s.readFromFile(path)
 		}
 	}
-	return nil, fmt.Errorf("memory not found: %s", id)
+	return nil, fmt.Errorf("%w: %s", ErrNotFound, id)
+}
+
+// FindByID returns a memory by ID without incrementing access count.
+func (s *Store) FindByID(id string) (*Memory, error) {
+	return s.findByID(id)
 }
 
 func (s *Store) filePath(mem *Memory) string {
