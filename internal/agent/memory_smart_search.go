@@ -49,16 +49,17 @@ type scoredMemory struct {
 }
 
 type smartSearchResult struct {
-	ID       string   `json:"id"`
-	Content  string   `json:"content"`
-	Phase    string   `json:"phase"`
-	Category string   `json:"category"`
-	Scope    string   `json:"scope"`
-	Source   string   `json:"source"`
-	Tags     []string `json:"tags"`
-	Score    float64  `json:"score"`
-	Matched  []string `json:"matched_tokens"`
-	Preview  string   `json:"preview"`
+	ID        string   `json:"id"`
+	Content   string   `json:"content"`
+	Phase     string   `json:"phase"`
+	Category  string   `json:"category"`
+	Scope     string   `json:"scope"`
+	Source    string   `json:"source"`
+	Tags      []string `json:"tags"`
+	Score     float64  `json:"score"`
+	Matched   []string `json:"matched_tokens"`
+	Preview   string   `json:"preview"`
+	CreatedAt string   `json:"created_at"`
 }
 
 func (t *MemorySmartSearchTool) Execute(ctx context.Context, params map[string]any) (ToolResult, error) {
@@ -141,7 +142,8 @@ func (t *MemorySmartSearchTool) Execute(ctx context.Context, params map[string]a
 			Tags:     mem.Tags,
 			Score:    math.Round(scored[i].Score*100) / 100,
 			Matched:  scored[i].Tokens,
-			Preview:  truncateContent(mem.Content, 120),
+			Preview:   truncateContent(mem.Content, 120),
+				CreatedAt: mem.CreatedAt.Format(time.RFC3339),
 		})
 	}
 
@@ -181,7 +183,8 @@ func (t *MemorySmartSearchTool) Execute(ctx context.Context, params map[string]a
 					Tags:     linked.Tags,
 					Score:    0,
 					Matched:  []string{"related"},
-					Preview:  truncateContent(linked.Content, 120),
+					Preview:   truncateContent(linked.Content, 120),
+					CreatedAt: linked.CreatedAt.Format(time.RFC3339),
 				})
 			}
 		}
