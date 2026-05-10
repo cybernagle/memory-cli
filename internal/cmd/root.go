@@ -13,7 +13,7 @@ import (
 
 var cfgPath string
 
-var version = "0.0.0"
+var version = "0.1.0"
 
 var rootCmd = &cobra.Command{
 	Use:   "memory",
