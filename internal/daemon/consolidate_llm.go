@@ -24,7 +24,7 @@ func (t *ConsolidateLLMTask) Run(s store.Store) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	if len(organized) < 50 {
+	if len(organized) < 5 {
 		return 0, nil
 	}
 
