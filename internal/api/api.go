@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cybernagle/memory-cli/internal/plugin"
 	"github.com/cybernagle/memory-cli/internal/store"
 )
 
@@ -25,11 +26,12 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 }
 
 type Server struct {
-	store  store.Store
-	mux    *http.ServeMux
-	keys   []string
-	start  time.Time
-	dbPath string
+	store    store.Store
+	mux      *http.ServeMux
+	keys     []string
+	start    time.Time
+	dbPath   string
+	registry *plugin.Registry
 }
 
 func NewServer(s store.Store, dbPath string, keys []string) *Server {
@@ -42,6 +44,10 @@ func NewServer(s store.Store, dbPath string, keys []string) *Server {
 	}
 	srv.routes()
 	return srv
+}
+
+func (s *Server) SetRegistry(r *plugin.Registry) {
+	s.registry = r
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -61,6 +67,10 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/activity/heatmap", s.handleHeatmap)
 	s.mux.HandleFunc("/process/status", s.handleProcessStatus)
 	s.mux.HandleFunc("/process/events", s.handleProcessEvents)
+	s.mux.HandleFunc("/plugins/components", s.handlePluginComponents)
+	s.mux.HandleFunc("/plugins/processors", s.handlePluginProcessors)
+	s.mux.HandleFunc("/plugins/ingests", s.handlePluginIngests)
+	s.mux.HandleFunc("/plugins/entities", s.handlePluginEntities)
 }
 
 func (s *Server) auth(next http.HandlerFunc) http.HandlerFunc {

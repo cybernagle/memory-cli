@@ -94,6 +94,7 @@ var serveCmd = &cobra.Command{
 
 		// Start daemon
 		d := daemon.New(s, interval, decayThreshold, cfg.Daemon.UpgradeAccess, notifier)
+		var pipelineReg *plugin.Registry
 
 		// Wire LLM processor if ANTHROPIC_API_KEY is available
 		if llmClient, err := llm.NewClient(llm.Config{}); err == nil {
@@ -107,26 +108,26 @@ var serveCmd = &cobra.Command{
 
 				// Wire plugin pipeline if enabled
 				if cfg.Pipeline.Enabled {
-					reg := plugin.NewRegistry()
+					pipelineReg = plugin.NewRegistry()
 					entityComp := entity.NewEntityComponent()
 					if err := entityComp.Init(context.Background(), sqliteStore.DB()); err != nil {
 						fmt.Fprintf(os.Stderr, "entity init error: %v\n", err)
 					} else {
-						reg.RegisterComponent(entityComp)
+						pipelineReg.RegisterComponent(entityComp)
 						fp := factprocessor.New(llmClient, entityComp)
-						reg.RegisterProcessor(fp)
+						pipelineReg.RegisterProcessor(fp)
 
 						// Register ingest adapters
 						adapters := getAdapters("")
 						for _, a := range adapters {
-							reg.RegisterIngest(plugin.NewIngestAdapter(a))
+							pipelineReg.RegisterIngest(plugin.NewIngestAdapter(a))
 						}
 
 						router := func(ctx context.Context, item plugin.DataItem) error {
 							mem := factprocessor.NewMemoryFromDataItem(item)
 							return s.IngestMemory(mem)
 						}
-						engine := plugin.NewPipelineEngine(reg, s, router)
+						engine := plugin.NewPipelineEngine(pipelineReg, s, router)
 						threshold := cfg.Pipeline.Threshold
 						if threshold == 0 {
 							threshold = 100
@@ -186,6 +187,7 @@ var serveCmd = &cobra.Command{
 			dbPath = config.SQLiteDefaultPath()
 		}
 		apiSrv := api.NewServer(s, dbPath, cfg.API.Keys)
+			apiSrv.SetRegistry(pipelineReg)
 		apiAddr := "127.0.0.1:8765"
 		go func() {
 			fmt.Printf("Memory REST API listening on %s\n", apiAddr)
