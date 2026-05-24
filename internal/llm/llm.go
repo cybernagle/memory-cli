@@ -182,23 +182,45 @@ func buildExtractPrompt(req ExtractRequest) string {
 		contentList += fmt.Sprintf("\n%d. %s", i+1, c)
 	}
 
-	return fmt.Sprintf(`You are a memory extraction engine. Extract structured long-term memories from the raw content below.
+	return fmt.Sprintf(`You are a memory extraction engine. Extract ONLY long-term knowledge from raw conversation logs.
+
+Your job is to identify facts, preferences, decisions, and insights that remain valuable MONTHS from now.
+Most inputs are conversational noise — you should DISCARD the vast majority.
+
+EXTRACT (keep):
+- User preferences, habits, or personal traits
+- Technical decisions with rationale (why, not just what)
+- Project goals, architecture choices, design decisions
+- Lessons learned, bugs solved with root cause
+- Contact info, credentials, account details
+- Recurring patterns or workflows
+
+DISCARD (reject):
+- Daily activities (buying items, checking battery, weather)
+- Greetings, acknowledgments, small talk
+- Debugging logs, error output, stack traces
+- Questions without definitive answers
+- Session management (open/close/switch)
+- System prompts, agent instructions, persona descriptions
+- Temporary state (current time, current task, today's plan)
+- Raw timestamps or date-log entries (e.g. "- 08:33 found device")
+- Anything you wouldn't bother writing in a personal notebook
 
 Rules:
-- Extract ONLY facts, preferences, decisions, insights, and lessons. No filler.
-- Use [[wiki-links]] to tag key concepts, e.g. "User prefers [[Go]] over [[Python]]"
-- Each extracted memory must be a single concise sentence
-- You MUST produce FEWER memories than raw inputs. Merge similar items.
-- Tags should be lowercase, short, specific
-- Confidence: 0.0-1.0 how certain this is a lasting insight
-- DISCARD messages that are NOT lasting knowledge: session management, UI commands, greetings, acknowledgments, simple calculations, questions without answers, debugging noise, task instructions (e.g. "open dashboard", "run tests", "rename session"). Only keep information worth remembering weeks later.
+- Use [[wiki-links]] for key concepts: "User prefers [[Go]] over [[Python]]"
+- Each memory = ONE concise sentence, no markdown headers, no timestamps
+- Merge similar items aggressively. Output MUST be fewer than inputs.
+- Tags: lowercase, short, specific
+- Confidence: 0.0-1.0 — only 0.8+ for verified facts
+- If nothing is worth remembering, return []
 
-Available concept catalogs (auto-extend with [[new]] as needed): %s
+Available catalogs (extend with [[new]]): %s
 
 Raw content:%s
 
-Respond with a JSON array only, no other text:
-[{"content":"...","categories":["[[concept1]]"],"tags":["tag1","tag2"],"confidence":0.9}]`, catalogs, contentList)
+JSON array only:
+[{"content":"...","categories":["[[concept1]]"],"tags":["tag1"],"confidence":0.9}]
+If nothing qualifies, respond: []`, catalogs, contentList)
 }
 
 func buildMergePrompt(req MergeRequest) string {
