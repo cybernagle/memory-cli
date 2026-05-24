@@ -2,7 +2,6 @@ package daemon
 
 import (
 	"testing"
-	"time"
 
 	"github.com/cybernagle/memory-cli/internal/config"
 	"github.com/cybernagle/memory-cli/internal/store"
@@ -23,33 +22,10 @@ func tempStore(t *testing.T) store.Store {
 	return s
 }
 
-func TestExpireTask(t *testing.T) {
+func TestExpireTaskNoOp(t *testing.T) {
 	s := tempStore(t)
 
-	mem, err := s.Write("should expire", store.PhaseInbox, store.CategoryInbox, "global", nil, "manual")
-	if err != nil {
-		t.Fatalf("write: %v", err)
-	}
-
-	time.Sleep(2 * time.Millisecond)
-
-	task := &ExpireTask{}
-	count, err := task.Run(s)
-	if err != nil {
-		t.Fatalf("run: %v", err)
-	}
-	if count != 1 {
-		t.Fatalf("expected 1 expired, got %d", count)
-	}
-	if _, err := s.Read(mem.ID); err == nil {
-		t.Fatal("expired memory should be deleted")
-	}
-}
-
-func TestExpireTaskDoesNotRemoveOrganized(t *testing.T) {
-	s := tempStore(t)
-
-	_, err := s.Write("permanent", store.PhaseOrganized, store.CategoryKnowledge, "global", nil, "manual")
+	_, err := s.Write("should not expire", store.PhaseInbox, store.CategoryInbox, "global", nil, "manual")
 	if err != nil {
 		t.Fatalf("write: %v", err)
 	}
@@ -60,11 +36,11 @@ func TestExpireTaskDoesNotRemoveOrganized(t *testing.T) {
 		t.Fatalf("run: %v", err)
 	}
 	if count != 0 {
-		t.Fatalf("expected 0 expired, got %d", count)
+		t.Fatalf("expected 0 (no-op), got %d", count)
 	}
 }
 
-func TestDecayTask(t *testing.T) {
+func TestDecayTaskNoOp(t *testing.T) {
 	s := tempStore(t)
 
 	_, err := s.Write("unused old", store.PhaseOrganized, store.CategoryKnowledge, "global", nil, "manual")
@@ -77,12 +53,12 @@ func TestDecayTask(t *testing.T) {
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
-	if count < 0 {
-		t.Fatalf("expected non-negative count, got %d", count)
+	if count != 0 {
+		t.Fatalf("expected 0 (no-op), got %d", count)
 	}
 }
 
-func TestConsolidateTaskDedup(t *testing.T) {
+func TestConsolidateTaskNoOp(t *testing.T) {
 	s := tempStore(t)
 
 	_, err := s.Write("duplicate content here", store.PhaseOrganized, store.CategoryKnowledge, "global", nil, "manual")
@@ -99,19 +75,16 @@ func TestConsolidateTaskDedup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
-	if count != 1 {
-		t.Fatalf("expected 1 deduped, got %d", count)
+	if count != 0 {
+		t.Fatalf("expected 0 (no-op), got %d", count)
 	}
 
 	memories, err := s.List(store.ListOptions{})
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
-	if len(memories) != 1 {
-		t.Fatalf("expected 1 memory after consolidate, got %d", len(memories))
-	}
-	if memories[0].Content != "duplicate content here" {
-		t.Fatalf("expected content preserved, got %q", memories[0].Content)
+	if len(memories) != 2 {
+		t.Fatalf("expected 2 memories (no deletion), got %d", len(memories))
 	}
 }
 

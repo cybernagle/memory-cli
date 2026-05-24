@@ -13,25 +13,8 @@ type DecayTask struct {
 func (t *DecayTask) Name() string { return "decay" }
 
 func (t *DecayTask) Run(s store.Store) (int, error) {
-	threshold := t.Threshold
-	if threshold == 0 {
-		threshold = 30 * 24 * time.Hour
-	}
-
-	memories, err := s.List(store.ListOptions{Phase: store.PhaseOrganized})
-	if err != nil {
-		return 0, err
-	}
-
-	now := time.Now()
-	count := 0
-	for _, mem := range memories {
-		if now.Sub(mem.CreatedAt) > threshold && mem.AccessCount == 0 {
-			if err := s.Delete(mem.ID); err != nil {
-				continue
-			}
-			count++
-		}
-	}
-	return count, nil
+	// Decay is a no-op: data is never deleted, only consolidated.
+	// Old decay logic deleted organized memories with AccessCount=0 older
+	// than threshold, which conflicts with the principle that total never decreases.
+	return 0, nil
 }
