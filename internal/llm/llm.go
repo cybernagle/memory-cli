@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
@@ -106,6 +107,9 @@ type ExtractedMemory struct {
 }
 
 func (c *Client) Extract(ctx context.Context, req ExtractRequest) ([]ExtractedMemory, error) {
+	ctx, cancel := context.WithTimeout(ctx, 120*time.Second)
+	defer cancel()
+
 	prompt := buildExtractPrompt(req)
 	resp, err := c.client.Messages.New(ctx, anthropic.MessageNewParams{
 		MaxTokens: 4096,
@@ -145,6 +149,9 @@ type MergedMemory struct {
 }
 
 func (c *Client) Merge(ctx context.Context, req MergeRequest) ([]MergedMemory, error) {
+	ctx, cancel := context.WithTimeout(ctx, 120*time.Second)
+	defer cancel()
+
 	prompt := buildMergePrompt(req)
 	resp, err := c.client.Messages.New(ctx, anthropic.MessageNewParams{
 		MaxTokens: 4096,

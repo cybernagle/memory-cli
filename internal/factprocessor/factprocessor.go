@@ -47,6 +47,11 @@ func (p *FactProcessor) Produces() []plugin.DataType {
 	return []plugin.DataType{plugin.DataEntity}
 }
 
+const (
+	maxContentChars   = 30000 // max total chars per LLM call
+	maxContentsPerCall = 20   // max items per LLM call
+)
+
 func (p *FactProcessor) Process(ctx context.Context, input plugin.ProcessInput) (*plugin.ProcessOutput, error) {
 	groups := groupBySession(input.Items)
 	if len(groups) == 0 {
@@ -57,6 +62,8 @@ func (p *FactProcessor) Process(ctx context.Context, input plugin.ProcessInput) 
 	var allExtracted []llm.ExtractedMemory
 	var allSourceIDs []string
 
+	log.Printf("[fact-processor] %d sessions to process", len(groups))
+
 	for sid, items := range groups {
 		var contents []string
 		for _, item := range items {
@@ -64,23 +71,29 @@ func (p *FactProcessor) Process(ctx context.Context, input plugin.ProcessInput) 
 			allSourceIDs = append(allSourceIDs, item.ID)
 		}
 
-		extracted, err := p.extract(ctx, contents)
-		if err != nil {
-			log.Printf("[fact-processor] extract session %s: %v", sid, err)
-			result.Errors++
-			continue
-		}
-
-		// Convergence: output must be fewer than input
-		if len(extracted) > len(contents) {
-			trimTo := len(contents) - 1
-			if trimTo < 1 {
-				trimTo = 1
+		// Split large sessions into chunks respecting char and count limits
+		chunks := chunkContents(contents, maxContentsPerCall, maxContentChars)
+		log.Printf("[fact-processor] session %s: %d items → %d chunks", sid, len(contents), len(chunks))
+		for ci, chunk := range chunks {
+			log.Printf("[fact-processor] extracting chunk %d/%d (session %s, %d items)...", ci+1, len(chunks), sid, len(chunk))
+			extracted, err := p.extract(ctx, chunk)
+			if err != nil {
+				log.Printf("[fact-processor] extract session %s chunk %d: %v", sid, ci, err)
+				result.Errors++
+				continue
 			}
-			extracted = extracted[:trimTo]
-		}
+			log.Printf("[fact-processor] extracted %d memories from chunk %d", len(extracted), ci+1)
 
-		allExtracted = append(allExtracted, extracted...)
+			if len(extracted) > len(chunk) {
+				trimTo := len(chunk) - 1
+				if trimTo < 1 {
+					trimTo = 1
+				}
+				extracted = extracted[:trimTo]
+			}
+
+			allExtracted = append(allExtracted, extracted...)
+		}
 	}
 
 	// Merge layer
@@ -129,25 +142,27 @@ func (p *FactProcessor) Process(ctx context.Context, input plugin.ProcessInput) 
 }
 
 func (p *FactProcessor) extract(ctx context.Context, contents []string) ([]llm.ExtractedMemory, error) {
-	if len(contents) > p.batchSize {
-		var all []llm.ExtractedMemory
-		for i := 0; i < len(contents); i += p.batchSize {
-			end := i + p.batchSize
-			if end > len(contents) {
-				end = len(contents)
-			}
-			batch, err := p.llm.Extract(ctx, llm.ExtractRequest{Contents: contents[i:end]})
-			if err != nil {
-				return nil, err
-			}
-			all = append(all, batch...)
-		}
-		if len(all) > len(contents) {
-			all = all[:len(contents)]
-		}
-		return all, nil
-	}
 	return p.llm.Extract(ctx, llm.ExtractRequest{Contents: contents})
+}
+
+// chunkContents splits contents into chunks that fit within count and char limits.
+func chunkContents(contents []string, maxCount, maxChars int) [][]string {
+	var chunks [][]string
+	var current []string
+	chars := 0
+	for _, c := range contents {
+		if len(current) >= maxCount || (chars+len(c) > maxChars && len(current) > 0) {
+			chunks = append(chunks, current)
+			current = nil
+			chars = 0
+		}
+		current = append(current, c)
+		chars += len(c)
+	}
+	if len(current) > 0 {
+		chunks = append(chunks, current)
+	}
+	return chunks
 }
 
 func (p *FactProcessor) merge(ctx context.Context, extracted []llm.ExtractedMemory) ([]llm.MergedMemory, error) {
