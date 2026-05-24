@@ -50,7 +50,7 @@ func (a *ClaudeAdapter) Ingest() ([]*store.Memory, error) {
 					}
 					memories = append(memories, &store.Memory{
 						Content:  chunk.content,
-						Phase:    store.PhaseOrganized,
+						Phase:    store.PhaseInbox,
 						Category: store.CategoryKnowledge,
 						Scope:    "global",
 						Tags:     tags,

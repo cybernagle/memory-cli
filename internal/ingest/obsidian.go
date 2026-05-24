@@ -62,7 +62,7 @@ func (a *ObsidianAdapter) Ingest() ([]*store.Memory, error) {
 
 		memories = append(memories, &store.Memory{
 			Content:  truncate(body, 10000),
-			Phase:    store.PhaseOrganized,
+			Phase:    store.PhaseInbox,
 			Category: store.CategoryKnowledge,
 			Scope:    "global",
 			Tags:     uniqueTags(allTags),

@@ -54,7 +54,7 @@ func (a *LogseqAdapter) Ingest() ([]*store.Memory, error) {
 
 			memories = append(memories, &store.Memory{
 				Content:  content,
-				Phase:    store.PhaseOrganized,
+				Phase:    store.PhaseInbox,
 				Category: store.CategoryKnowledge,
 				Scope:    "global",
 				Tags:     uniqueTags(tags),
