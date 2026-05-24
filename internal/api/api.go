@@ -256,13 +256,17 @@ func computeStats(s store.Store) (map[string]any, error) {
 
 	inbox := 0
 	organized := 0
+	processed := 0
 	cats := map[string]int{}
 	tags := map[string]int{}
 	for _, m := range all {
-		if m.Phase == store.PhaseInbox {
+		switch m.Phase {
+		case store.PhaseInbox:
 			inbox++
-		} else {
+		case store.PhaseOrganized:
 			organized++
+		default:
+			processed++
 		}
 		cats[string(m.Category)]++
 		for _, t := range m.Tags {
@@ -274,6 +278,7 @@ func computeStats(s store.Store) (map[string]any, error) {
 		"total":      len(all),
 		"inbox":      inbox,
 		"organized":  organized,
+		"processed":  processed,
 		"categories": cats,
 		"tags":       tags,
 	}, nil

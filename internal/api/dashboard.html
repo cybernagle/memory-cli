@@ -430,6 +430,7 @@ async function loadOverview(){
       <div class="status-card"><div class="label">Total</div><div class="value">${d.total||0}</div></div>
       <div class="status-card"><div class="label">Inbox</div><div class="value" style="color:var(--orange)">${d.inbox||0}</div></div>
       <div class="status-card"><div class="label">Long-term</div><div class="value" style="color:var(--green)">${d.organized||0}</div></div>
+      <div class="status-card"><div class="label">Processed</div><div class="value" style="color:var(--text2)">${d.processed||0}</div></div>
       <div class="status-card"><div class="label">Categories</div><div class="value">${Object.keys(d.categories||{}).length}</div></div>`;
   }catch(e){}
   try{
