@@ -54,31 +54,31 @@ func (s *Server) handleHeatmap(w http.ResponseWriter, r *http.Request) {
 
 func getActivityData(ss *store.SqliteStore, daysStr string) (map[string]any, error) {
 	rows, err := ss.QueryRows(`
-		SELECT date(created_at) as day, action, COUNT(*) as count
-		FROM activity_log
+		SELECT date(created_at) as day, source, COUNT(*) as count
+		FROM memories
 		WHERE created_at >= datetime('now', '-' || ? || ' days')
-		GROUP BY day, action
+		GROUP BY day, source
 		ORDER BY day DESC`, daysStr)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
-	type dayAction struct {
+	type daySource struct {
 		Day    string `json:"day"`
-		Action string `json:"action"`
+		Source string `json:"source"`
 		Count  int    `json:"count"`
 	}
-	var items []dayAction
+	var items []daySource
 	for rows.Next() {
-		var d dayAction
-		if err := rows.Scan(&d.Day, &d.Action, &d.Count); err != nil {
+		var d daySource
+		if err := rows.Scan(&d.Day, &d.Source, &d.Count); err != nil {
 			continue
 		}
 		items = append(items, d)
 	}
 	if items == nil {
-		items = []dayAction{}
+		items = []daySource{}
 	}
 	return map[string]any{"days": items}, nil
 }
@@ -86,7 +86,7 @@ func getActivityData(ss *store.SqliteStore, daysStr string) (map[string]any, err
 func getHeatmapData(ss *store.SqliteStore) (map[string]any, error) {
 	rows, err := ss.QueryRows(`
 		SELECT date(created_at) as day, COUNT(*) as count
-		FROM activity_log
+		FROM memories
 		WHERE created_at >= datetime('now', '-365 days')
 		GROUP BY day
 		ORDER BY day ASC`)
@@ -132,7 +132,6 @@ func getHeatmapData(ss *store.SqliteStore) (map[string]any, error) {
 		}
 	}
 
-	// Check if the streak extends to today
 	today := time.Now().Format("2006-01-02")
 	if len(days) > 0 && days[len(days)-1].Date == today {
 		streak = maxStreak
@@ -143,30 +142,10 @@ func getHeatmapData(ss *store.SqliteStore) (map[string]any, error) {
 		avgDay = total / len(days)
 	}
 
-	// By action breakdown
-	actionRows, err := ss.QueryRows(`
-		SELECT action, COUNT(*) as count
-		FROM activity_log
-		WHERE created_at >= datetime('now', '-30 days')
-		GROUP BY action`)
-	if err == nil {
-		defer actionRows.Close()
-	}
-	byAction := map[string]int{}
-	if actionRows != nil {
-		for actionRows.Next() {
-			var action string
-			var count int
-			if actionRows.Scan(&action, &count) == nil {
-				byAction[action] = count
-			}
-		}
-	}
-
-	// By source breakdown
+	// By source breakdown (from memories, not activity_log)
 	sourceRows, err := ss.QueryRows(`
 		SELECT source, COUNT(*) as count
-		FROM activity_log
+		FROM memories
 		WHERE created_at >= datetime('now', '-30 days')
 		GROUP BY source`)
 	if err == nil {
@@ -179,6 +158,26 @@ func getHeatmapData(ss *store.SqliteStore) (map[string]any, error) {
 			var count int
 			if sourceRows.Scan(&source, &count) == nil {
 				bySource[source] = count
+			}
+		}
+	}
+
+	// By phase breakdown
+	phaseRows, err := ss.QueryRows(`
+		SELECT phase, COUNT(*) as count
+		FROM memories
+		WHERE created_at >= datetime('now', '-30 days')
+		GROUP BY phase`)
+	if err == nil {
+		defer phaseRows.Close()
+	}
+	byAction := map[string]int{}
+	if phaseRows != nil {
+		for phaseRows.Next() {
+			var phase string
+			var count int
+			if phaseRows.Scan(&phase, &count) == nil {
+				byAction[phase] = count
 			}
 		}
 	}
