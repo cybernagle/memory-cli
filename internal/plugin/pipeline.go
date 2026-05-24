@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 
+	"github.com/cybernagle/memory-cli/internal/processor"
 	"github.com/cybernagle/memory-cli/internal/store"
 )
 
@@ -27,7 +28,7 @@ func NewPipelineEngine(registry *Registry, store store.Store, router DataItemRou
 }
 
 // Run reads unprocessed inbox, routes to processors, writes results via components.
-func (e *PipelineEngine) Run(ctx context.Context) (*PipelineResult, error) {
+func (e *PipelineEngine) Run(ctx context.Context, tracker *processor.StatusTracker) (*PipelineResult, error) {
 	memories, err := e.store.List(store.ListOptions{Phase: store.PhaseInbox})
 	if err != nil {
 		return nil, fmt.Errorf("list inbox: %w", err)
@@ -37,6 +38,15 @@ func (e *PipelineEngine) Run(ctx context.Context) (*PipelineResult, error) {
 	}
 
 	log.Printf("[pipeline] starting: %d inbox memories", len(memories))
+
+	if tracker != nil {
+		tracker.Update(func(st *processor.ProcessStatus) {
+			st.Progress.TotalInbox = len(memories)
+			st.Phase = "extracting"
+			st.Message = fmt.Sprintf("Processing %d inbox memories", len(memories))
+		})
+		tracker.Emit(processor.EventFromStatus("status"))
+	}
 
 	items := make([]InboxItem, len(memories))
 	for i, m := range memories {
@@ -55,6 +65,14 @@ func (e *PipelineEngine) Run(ctx context.Context) (*PipelineResult, error) {
 
 	totalResult := &PipelineResult{}
 	for _, proc := range e.registry.AllProcessors() {
+		if tracker != nil {
+			tracker.Update(func(st *processor.ProcessStatus) {
+				st.Phase = "extracting"
+				st.Message = fmt.Sprintf("Running processor: %s", proc.Name())
+			})
+			tracker.Emit(processor.EventFromStatus("status"))
+		}
+
 		input := ProcessInput{
 			Items:      items,
 			Components: resolver,
@@ -69,6 +87,16 @@ func (e *PipelineEngine) Run(ctx context.Context) (*PipelineResult, error) {
 
 		log.Printf("[pipeline] processor %s: %d items → %d results",
 			proc.Name(), len(items), len(output.Results))
+
+		if tracker != nil {
+			tracker.Update(func(st *processor.ProcessStatus) {
+				st.Phase = "merging"
+				st.Message = fmt.Sprintf("Writing %d results from %s", len(output.Results), proc.Name())
+				st.Progress.Layer1Input = len(items)
+				st.Progress.Layer1Output = len(output.Results)
+			})
+			tracker.Emit(processor.EventFromStatus("status"))
+		}
 
 		for _, item := range output.Results {
 			if err := e.router(ctx, item); err != nil {

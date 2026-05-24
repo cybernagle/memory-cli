@@ -11,6 +11,7 @@ import (
 
 	"github.com/cybernagle/memory-cli/internal/config"
 	"github.com/cybernagle/memory-cli/internal/ingest"
+	"github.com/cybernagle/memory-cli/internal/store"
 )
 
 var ingestSource string
@@ -56,6 +57,11 @@ var ingestCmd = &cobra.Command{
 					continue
 				}
 				count++
+			}
+			if count > 0 {
+				if ss, ok := s.(*store.SqliteStore); ok {
+					ss.LogActivity("ingest", "", name, fmt.Sprintf("%d memories", count))
+				}
 			}
 			fmt.Printf("Ingested %d memories from %s\n", count, name)
 			total += count
