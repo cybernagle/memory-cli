@@ -105,6 +105,7 @@ var serveCmd = &cobra.Command{
 					Threshold:   100,
 				})
 				fmt.Println("LLM processor enabled (threshold: 100)")
+				d.AddTask(&daemon.ConsolidateLLMTask{Store: sqliteStore, LLM: llmClient})
 
 				// Wire plugin pipeline if enabled
 				if cfg.Pipeline.Enabled {

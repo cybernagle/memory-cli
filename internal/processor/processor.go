@@ -155,14 +155,14 @@ func (p *Processor) ProcessInbox(ctx context.Context) (*Result, error) {
 		p.updateTrackerProgress(result)
 		p.emit("log", fmt.Sprintf("Session %s: %d → %d extracted", sid, len(mems), len(extracted)))
 
-		// Flush batch every flushInterval sessions or at the end
-		if len(batchExtracted) > 0 && (groupIdx%flushInterval == 0 || groupIdx == len(groups)) {
-			if err := p.flushBatch(ctx, batchExtracted, batchSourceIDs, result); err != nil {
-				log.Printf("[processor] flush batch error: %v", err)
-				p.emit("error", fmt.Sprintf("Flush failed: %v", err))
-			}
-			batchExtracted = nil
-			batchSourceIDs = nil
+	}
+
+	// Global merge: consolidate all extracted memories across sessions
+	if len(batchExtracted) > 0 {
+		p.emit("log", fmt.Sprintf("Global merge: %d extracted memories", len(batchExtracted)))
+		if err := p.flushBatch(ctx, batchExtracted, batchSourceIDs, result); err != nil {
+			log.Printf("[processor] global merge error: %v", err)
+			p.emit("error", fmt.Sprintf("Global merge failed: %v", err))
 		}
 	}
 

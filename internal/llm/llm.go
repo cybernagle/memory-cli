@@ -233,15 +233,20 @@ func buildMergePrompt(req MergeRequest) string {
 		list += fmt.Sprintf("\n%d. %s%s (confidence: %.1f)", i+1, m.Content, tags, m.Confidence)
 	}
 
-	return fmt.Sprintf(`You are a memory consolidation engine. Merge related memories into fewer, denser memories.
+	return fmt.Sprintf(`You are a memory consolidation engine. AGGRESSIVELY merge related memories.
 
-Rules:
-- Merge memories about the same topic into one
-- The merged memory should be richer and more precise than any individual input
-- Keep all [[wiki-links]] from source memories
-- You MUST produce FEWER outputs than inputs
-- If memories are unrelated, keep them separate
-- Each source memory ID maps to the merged result
+Your goal: produce the MINIMUM number of high-quality memories. Every output should be a dense, information-rich paragraph.
+
+MERGE RULES (strict):
+- Group memories by topic/project/concept FIRST
+- ALL memories about the same project/topic MUST become ONE merged memory
+- Example: 5 memories about [[car-agent]] -> 1 comprehensive car-agent summary
+- Example: 3 memories about user preferences -> 1 preference summary
+- The merged result must be RICHER than any individual input
+- Keep ALL [[wiki-links]] from source memories
+- You MUST produce at MOST 50%% of the input count (ideally 30%%)
+- Only keep unrelated memories separate if they cover genuinely different topics
+- Each source ID maps to its merged result
 
 Input memories:%s
 
