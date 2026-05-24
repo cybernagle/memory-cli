@@ -8,6 +8,7 @@ type Phase string
 
 const (
 	PhaseInbox     Phase = "inbox"
+	PhaseProcessed Phase = "processed"
 	PhaseOrganized Phase = "organized"
 )
 
@@ -45,6 +46,7 @@ type Memory struct {
 	Scope       string     `yaml:"scope" json:"scope"`
 	Tags        []string   `yaml:"tags" json:"tags"`
 	Source      string     `yaml:"source" json:"source"`
+	SessionID   string     `yaml:"session_id,omitempty" json:"session_id,omitempty"`
 	CreatedAt   time.Time  `yaml:"created_at" json:"created_at"`
 	UpdatedAt   time.Time  `yaml:"updated_at" json:"updated_at"`
 	ExpiresAt   *time.Time `yaml:"expires_at,omitempty" json:"expires_at,omitempty"`

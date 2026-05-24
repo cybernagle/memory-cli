@@ -8,7 +8,7 @@ import (
 	"github.com/cybernagle/memory-cli/internal/store"
 )
 
-func tempStore(t *testing.T) *store.Store {
+func tempStore(t *testing.T) store.Store {
 	t.Helper()
 	cfg := &config.Config{
 		Storage: config.StorageConfig{

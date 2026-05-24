@@ -10,7 +10,7 @@ type UpgradeTask struct {
 
 func (t *UpgradeTask) Name() string { return "upgrade" }
 
-func (t *UpgradeTask) Run(s *store.Store) (int, error) {
+func (t *UpgradeTask) Run(s store.Store) (int, error) {
 	threshold := t.Threshold
 	if threshold == 0 {
 		threshold = 3

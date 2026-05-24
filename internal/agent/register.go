@@ -4,7 +4,7 @@ import (
 	"github.com/cybernagle/memory-cli/internal/store"
 )
 
-func RegisterAll(a *Agent, s *store.Store) {
+func RegisterAll(a *Agent, s store.Store) {
 	a.RegisterTool(&MemoryWriteTool{store: s})
 	a.RegisterTool(&MemoryReadTool{store: s})
 	a.RegisterTool(&MemoryDeleteTool{store: s})

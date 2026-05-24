@@ -10,7 +10,7 @@ import (
 	"github.com/cybernagle/memory-cli/internal/config"
 )
 
-func tempStore(t *testing.T) (*Store, string) {
+func tempStore(t *testing.T) (*FileStore, string) {
 	t.Helper()
 	dir := t.TempDir()
 	cfg := &config.Config{
@@ -26,7 +26,7 @@ func tempStore(t *testing.T) (*Store, string) {
 	return s, dir
 }
 
-func tempStoreWithTTL(t *testing.T, ttl string) (*Store, string) {
+func tempStoreWithTTL(t *testing.T, ttl string) (*FileStore, string) {
 	t.Helper()
 	dir := t.TempDir()
 	cfg := &config.Config{
@@ -42,7 +42,7 @@ func tempStoreWithTTL(t *testing.T, ttl string) (*Store, string) {
 	return s, dir
 }
 
-func mustWrite(t *testing.T, s *Store, content string, phase Phase, category Category, scope string, tags []string, source string) *Memory {
+func mustWrite(t *testing.T, s *FileStore, content string, phase Phase, category Category, scope string, tags []string, source string) *Memory {
 	t.Helper()
 	mem, err := s.Write(content, phase, category, scope, tags, source)
 	if err != nil {

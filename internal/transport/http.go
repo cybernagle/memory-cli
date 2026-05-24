@@ -17,7 +17,7 @@ type HTTPServer struct {
 	mux   *http.ServeMux
 }
 
-func NewHTTPServer(keys []string, s *store.Store) *HTTPServer {
+func NewHTTPServer(keys []string, s store.Store) *HTTPServer {
 	a := agent.New(s)
 	agent.RegisterAll(a, s)
 

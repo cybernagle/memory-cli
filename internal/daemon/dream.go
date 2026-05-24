@@ -25,7 +25,7 @@ type DreamTask struct {
 
 func (t *DreamTask) Name() string { return fmt.Sprintf("dream-level-%d", t.Level) }
 
-func (t *DreamTask) Run(s *store.Store) (int, error) {
+func (t *DreamTask) Run(s store.Store) (int, error) {
 	switch t.Level {
 	case DreamLight:
 		return dreamLight(s)
@@ -39,7 +39,7 @@ func (t *DreamTask) Run(s *store.Store) (int, error) {
 }
 
 // dreamLight classifies inbox memories into categories based on content heuristics.
-func dreamLight(s *store.Store) (int, error) {
+func dreamLight(s store.Store) (int, error) {
 	memories, err := s.List(store.ListOptions{Phase: store.PhaseInbox})
 	if err != nil {
 		return 0, err
@@ -70,7 +70,7 @@ func dreamLight(s *store.Store) (int, error) {
 }
 
 // dreamMedium does light tasks plus merges similar memories and resolves wikilinks.
-func dreamMedium(s *store.Store) (int, error) {
+func dreamMedium(s store.Store) (int, error) {
 	lightCount, err := dreamLight(s)
 	if err != nil {
 		return lightCount, err
@@ -89,7 +89,7 @@ func dreamMedium(s *store.Store) (int, error) {
 }
 
 // dreamDeep does medium tasks plus cross-category analysis and reminder extraction.
-func dreamDeep(s *store.Store) (int, error) {
+func dreamDeep(s store.Store) (int, error) {
 	mediumCount, err := dreamMedium(s)
 	if err != nil {
 		return mediumCount, err
@@ -159,7 +159,7 @@ func containsAny(s string, keywords ...string) bool {
 }
 
 // mergeSimilar finds and merges memories with similar content prefixes.
-func mergeSimilar(s *store.Store) int {
+func mergeSimilar(s store.Store) int {
 	all, err := s.List(store.ListOptions{Phase: store.PhaseOrganized})
 	if err != nil {
 		return 0
@@ -193,7 +193,7 @@ func mergeSimilar(s *store.Store) int {
 }
 
 // extractReminders scans for time commitments and creates reminder memories.
-func extractReminders(s *store.Store) int {
+func extractReminders(s store.Store) int {
 	all, err := s.List(store.ListOptions{})
 	if err != nil {
 		return 0

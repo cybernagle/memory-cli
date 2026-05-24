@@ -11,7 +11,6 @@ import (
 
 	"github.com/cybernagle/memory-cli/internal/config"
 	"github.com/cybernagle/memory-cli/internal/ingest"
-	"github.com/cybernagle/memory-cli/internal/store"
 )
 
 var ingestSource string
@@ -52,7 +51,7 @@ var ingestCmd = &cobra.Command{
 				if existing != nil {
 					continue
 				}
-				if _, err := s.Write(mem.Content, store.PhaseOrganized, store.CategoryInbox, mem.Scope, mem.Tags, mem.Source); err != nil {
+				if err := s.IngestMemory(mem); err != nil {
 					fmt.Fprintf(os.Stderr, "Error writing memory from %s: %v\n", name, err)
 					continue
 				}
@@ -67,7 +66,7 @@ var ingestCmd = &cobra.Command{
 }
 
 func init() {
-	ingestCmd.Flags().StringVar(&ingestSource, "source", "all", "Source: claude, car-agent, fingersaver, logseq, obsidian, all")
+	ingestCmd.Flags().StringVar(&ingestSource, "source", "all", "Source: claude, conversations, car-agent, fingersaver, logseq, obsidian, all")
 	ingestCmd.Flags().StringVar(&ingestPath, "path", "", "Custom path for logseq/obsidian vault")
 	rootCmd.AddCommand(ingestCmd)
 }
@@ -75,17 +74,18 @@ func init() {
 func getAdapters(customPath string) map[string]ingest.Adapter {
 	home := config.MustHomeDir()
 	return map[string]ingest.Adapter{
-		"claude":      &ingest.ClaudeAdapter{Path: filepath.Join(home, ".claude")},
-		"car-agent":   &ingest.CarAgentAdapter{Path: filepath.Join(home, ".car-agent")},
-		"fingersaver": &ingest.FingersaverAdapter{Path: filepath.Join(home, ".fingersaver")},
-		"logseq":      &ingest.LogseqAdapter{Path: customPath},
-		"obsidian":    &ingest.ObsidianAdapter{Path: customPath},
+		"claude":        &ingest.ClaudeAdapter{Path: filepath.Join(home, ".claude")},
+		"conversations": &ingest.ConversationsAdapter{Path: filepath.Join(home, ".claude", "projects")},
+		"car-agent":     &ingest.CarAgentAdapter{Path: filepath.Join(home, ".car-agent")},
+		"fingersaver":   &ingest.FingersaverAdapter{Path: filepath.Join(home, ".fingersaver")},
+		"logseq":        &ingest.LogseqAdapter{Path: customPath},
+		"obsidian":      &ingest.ObsidianAdapter{Path: customPath},
 	}
 }
 
 func parseSources(source string) []string {
 	if source == "all" {
-		return []string{"claude", "car-agent", "fingersaver", "logseq", "obsidian"}
+		return []string{"claude", "conversations", "car-agent", "fingersaver", "logseq", "obsidian"}
 	}
 	return strings.Split(source, ",")
 }

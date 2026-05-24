@@ -9,7 +9,7 @@ import (
 	"github.com/cybernagle/memory-cli/internal/store"
 )
 
-func setupServer(t *testing.T) (*Server, *store.Store) {
+func setupServer(t *testing.T) (*Server, store.Store) {
 	t.Helper()
 	dir := t.TempDir()
 	cfg := &config.Config{
@@ -22,7 +22,7 @@ func setupServer(t *testing.T) (*Server, *store.Store) {
 	return NewServer(s), s
 }
 
-func mustWrite(t *testing.T, s *store.Store, content string, phase store.Phase, cat store.Category, tags []string) string {
+func mustWrite(t *testing.T, s store.Store, content string, phase store.Phase, cat store.Category, tags []string) string {
 	t.Helper()
 	mem, err := s.Write(content, phase, cat, "global", tags, "test")
 	if err != nil {

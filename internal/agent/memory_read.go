@@ -9,7 +9,7 @@ import (
 )
 
 type MemoryReadTool struct {
-	store *store.Store
+	store store.Store
 }
 
 func (t *MemoryReadTool) Name() string { return "memory_read" }

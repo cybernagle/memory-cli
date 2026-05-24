@@ -20,6 +20,8 @@ func MustHomeDir() string {
 type StorageConfig struct {
 	Root         string `yaml:"root"`
 	ShortTermTTL string `yaml:"short_term_ttl"`
+	Backend      string `yaml:"backend"`
+	SQLitePath   string `yaml:"sqlite_path"`
 }
 
 type DaemonConfig struct {
@@ -39,14 +41,22 @@ type IngestionConfig struct {
 }
 
 type NotificationConfig struct {
-	Enabled bool   `yaml:"enabled"`
-	Method  string `yaml:"method"` // "osascript" | "file"
+	Enabled         bool   `yaml:"enabled"`
+	Method          string `yaml:"method"` // "osascript" | "file" | "webhook"
+	DingDingWebhook string `yaml:"dingding_webhook"`
+	DingDingSecret  string `yaml:"dingding_secret"`
+	WeChatWebhook   string `yaml:"wechat_webhook"`
 }
 
 type APIConfig struct {
 	Enabled bool     `yaml:"enabled"`
 	Keys    []string `yaml:"keys"`
 	Listen  string   `yaml:"listen"`
+}
+
+type PipelineConfig struct {
+	Enabled   bool `yaml:"enabled"`
+	Threshold int  `yaml:"threshold"`
 }
 
 type Config struct {
@@ -56,6 +66,7 @@ type Config struct {
 	Timezone     string             `yaml:"timezone"`
 	Notification NotificationConfig `yaml:"notification"`
 	API          APIConfig          `yaml:"api"`
+	Pipeline     PipelineConfig     `yaml:"pipeline"`
 }
 
 func DefaultConfig() *Config {
@@ -131,4 +142,8 @@ func (c *Config) MemoryIndexPath() string {
 
 func (c *Config) PendingPath() string {
 	return filepath.Join(c.Storage.Root, "pending.md")
+}
+
+func SQLiteDefaultPath() string {
+	return filepath.Join(MustHomeDir(), ".memory", "memories.db")
 }

@@ -10,7 +10,7 @@ import (
 )
 
 type MemoryTagTool struct {
-	store *store.Store
+	store store.Store
 }
 
 func (t *MemoryTagTool) Name() string { return "memory_tag" }

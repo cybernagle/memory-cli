@@ -9,7 +9,7 @@ import (
 	"github.com/cybernagle/memory-cli/internal/store"
 )
 
-func setupAgent(t *testing.T) (*Agent, *store.Store) {
+func setupAgent(t *testing.T) (*Agent, store.Store) {
 	t.Helper()
 	dir := t.TempDir()
 	cfg := &config.Config{

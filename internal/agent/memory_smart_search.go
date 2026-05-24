@@ -14,7 +14,7 @@ import (
 )
 
 type MemorySmartSearchTool struct {
-	store *store.Store
+	store store.Store
 }
 
 func (t *MemorySmartSearchTool) Name() string { return "memory_smart_search" }
@@ -27,16 +27,16 @@ func (t *MemorySmartSearchTool) Parameters() ToolSchema {
 	return ToolSchema{
 		Type: "object",
 		Properties: map[string]ToolProperty{
-			"query":            {Type: "string", Description: "Natural language query (Chinese/English). Automatically tokenized for fuzzy matching."},
-			"top":              {Type: "integer", Description: "Return top N results by relevance (default 10)"},
-			"scope":            {Type: "string", Description: "Filter by scope"},
-			"phase":            {Type: "string", Description: "Filter by phase: inbox or organized", Enum: []string{"inbox", "organized"}},
-			"category":         {Type: "string", Description: "Filter by category"},
-			"source":           {Type: "string", Description: "Filter by source"},
-			"tags":             {Type: "string", Description: "Comma-separated tags (all must match)"},
-			"created_after":    {Type: "string", Description: "ISO 8601 datetime, only memories created after this time"},
-			"created_before":   {Type: "string", Description: "ISO 8601 datetime, only memories created before this time"},
-			"include_related":  {Type: "boolean", Description: "Include memories linked to matched results (default false)"},
+			"query":           {Type: "string", Description: "Natural language query (Chinese/English). Automatically tokenized for fuzzy matching."},
+			"top":             {Type: "integer", Description: "Return top N results by relevance (default 10)"},
+			"scope":           {Type: "string", Description: "Filter by scope"},
+			"phase":           {Type: "string", Description: "Filter by phase: inbox or organized", Enum: []string{"inbox", "organized"}},
+			"category":        {Type: "string", Description: "Filter by category"},
+			"source":          {Type: "string", Description: "Filter by source"},
+			"tags":            {Type: "string", Description: "Comma-separated tags (all must match)"},
+			"created_after":   {Type: "string", Description: "ISO 8601 datetime, only memories created after this time"},
+			"created_before":  {Type: "string", Description: "ISO 8601 datetime, only memories created before this time"},
+			"include_related": {Type: "boolean", Description: "Include memories linked to matched results (default false)"},
 		},
 		Required: []string{"query"},
 	}
@@ -133,17 +133,17 @@ func (t *MemorySmartSearchTool) Execute(ctx context.Context, params map[string]a
 		mem := scored[i].Memory
 		matchedIDs[mem.ID] = true
 		results = append(results, smartSearchResult{
-			ID:       mem.ID,
-			Content:  mem.Content,
-			Phase:    string(mem.Phase),
-			Category: string(mem.Category),
-			Scope:    mem.Scope,
-			Source:   mem.Source,
-			Tags:     mem.Tags,
-			Score:    math.Round(scored[i].Score*100) / 100,
-			Matched:  scored[i].Tokens,
+			ID:        mem.ID,
+			Content:   mem.Content,
+			Phase:     string(mem.Phase),
+			Category:  string(mem.Category),
+			Scope:     mem.Scope,
+			Source:    mem.Source,
+			Tags:      mem.Tags,
+			Score:     math.Round(scored[i].Score*100) / 100,
+			Matched:   scored[i].Tokens,
 			Preview:   truncateContent(mem.Content, 120),
-				CreatedAt: mem.CreatedAt.Format(time.RFC3339),
+			CreatedAt: mem.CreatedAt.Format(time.RFC3339),
 		})
 	}
 
@@ -174,15 +174,15 @@ func (t *MemorySmartSearchTool) Execute(ctx context.Context, params map[string]a
 				}
 				relatedIDs[linkID] = true
 				related = append(related, smartSearchResult{
-					ID:       linked.ID,
-					Content:  linked.Content,
-					Phase:    string(linked.Phase),
-					Category: string(linked.Category),
-					Scope:    linked.Scope,
-					Source:   linked.Source,
-					Tags:     linked.Tags,
-					Score:    0,
-					Matched:  []string{"related"},
+					ID:        linked.ID,
+					Content:   linked.Content,
+					Phase:     string(linked.Phase),
+					Category:  string(linked.Category),
+					Scope:     linked.Scope,
+					Source:    linked.Source,
+					Tags:      linked.Tags,
+					Score:     0,
+					Matched:   []string{"related"},
 					Preview:   truncateContent(linked.Content, 120),
 					CreatedAt: linked.CreatedAt.Format(time.RFC3339),
 				})

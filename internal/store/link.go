@@ -16,7 +16,7 @@ type Backlink struct {
 
 // ResolveBacklinks scans all memories for [[wikilinks]] and updates the Links field
 // on target memories to record incoming references.
-func (s *Store) ResolveBacklinks() (int, error) {
+func (s *FileStore) ResolveBacklinks() (int, error) {
 	all, err := s.List(ListOptions{})
 	if err != nil {
 		return 0, err
@@ -61,7 +61,7 @@ func (s *Store) ResolveBacklinks() (int, error) {
 }
 
 // GetBacklinks returns all memories that link to the given memory ID.
-func (s *Store) GetBacklinks(id string) ([]*Memory, error) {
+func (s *FileStore) GetBacklinks(id string) ([]*Memory, error) {
 	all, err := s.List(ListOptions{})
 	if err != nil {
 		return nil, err
@@ -77,7 +77,7 @@ func (s *Store) GetBacklinks(id string) ([]*Memory, error) {
 }
 
 // LinkMemories creates a bidirectional link between two memories.
-func (s *Store) LinkMemories(sourceID, targetID string) error {
+func (s *FileStore) LinkMemories(sourceID, targetID string) error {
 	source, err := s.findByID(sourceID)
 	if err != nil {
 		return fmt.Errorf("source not found: %w", err)
@@ -106,7 +106,7 @@ func (s *Store) LinkMemories(sourceID, targetID string) error {
 }
 
 // UnlinkMemories removes the bidirectional link between two memories.
-func (s *Store) UnlinkMemories(sourceID, targetID string) error {
+func (s *FileStore) UnlinkMemories(sourceID, targetID string) error {
 	source, err := s.findByID(sourceID)
 	if err != nil {
 		return err
@@ -157,4 +157,12 @@ func removeString(slice []string, s string) []string {
 		}
 	}
 	return result
+}
+
+func (s *FileStore) IngestMemory(mem *Memory) error {
+	return s.writeToFile(mem)
+}
+
+func (s *FileStore) MarkProcessed(id string) error {
+	return nil
 }

@@ -23,15 +23,23 @@ const frontMatterSeparator = "---"
 // ErrNotFound is returned when a memory ID does not exist.
 var ErrNotFound = errors.New("not found")
 
-type Store struct {
+// Compile-time check that FileStore implements Store.
+var _ Store = (*FileStore)(nil)
+
+type FileStore struct {
 	cfg *config.Config
 }
 
-func New(cfg *config.Config) *Store {
-	return &Store{cfg: cfg}
+func NewFileStore(cfg *config.Config) *FileStore {
+	return &FileStore{cfg: cfg}
 }
 
-func (s *Store) Init() error {
+// New is an alias for NewFileStore for backward compatibility.
+func New(cfg *config.Config) *FileStore {
+	return NewFileStore(cfg)
+}
+
+func (s *FileStore) Init() error {
 	dirs := []string{s.cfg.ShortTermDir(), s.cfg.LongTermDir()}
 	for _, dir := range dirs {
 		if err := os.MkdirAll(dir, 0755); err != nil {
@@ -47,12 +55,12 @@ func (s *Store) Init() error {
 	return nil
 }
 
-func (s *Store) WriteToInbox(content string, scope string, tags []string, source string) (*Memory, error) {
+func (s *FileStore) WriteToInbox(content string, scope string, tags []string, source string) (*Memory, error) {
 	now := time.Now()
 	mem := &Memory{
 		ID:          uuid.New().String(),
 		Content:     content,
-		ContentHash: hashContent(content),
+		ContentHash: HashContent(content),
 		Phase:       PhaseInbox,
 		Category:    CategoryInbox,
 		Scope:       defaultString(scope, "global"),
@@ -76,12 +84,12 @@ func (s *Store) WriteToInbox(content string, scope string, tags []string, source
 	return mem, nil
 }
 
-func (s *Store) Write(content string, memType Phase, category Category, scope string, tags []string, source string) (*Memory, error) {
+func (s *FileStore) Write(content string, memType Phase, category Category, scope string, tags []string, source string) (*Memory, error) {
 	now := time.Now()
 	mem := &Memory{
 		ID:          uuid.New().String(),
 		Content:     content,
-		ContentHash: hashContent(content),
+		ContentHash: HashContent(content),
 		Phase:       memType,
 		Category:    category,
 		Scope:       defaultString(scope, "global"),
@@ -106,7 +114,7 @@ func (s *Store) Write(content string, memType Phase, category Category, scope st
 	return mem, nil
 }
 
-func (s *Store) Read(id string) (*Memory, error) {
+func (s *FileStore) Read(id string) (*Memory, error) {
 	mem, err := s.findByID(id)
 	if err != nil {
 		return nil, err
@@ -118,7 +126,7 @@ func (s *Store) Read(id string) (*Memory, error) {
 	return mem, nil
 }
 
-func (s *Store) Delete(id string) error {
+func (s *FileStore) Delete(id string) error {
 	mem, err := s.findByID(id)
 	if err != nil {
 		return err
@@ -132,13 +140,14 @@ type ListOptions struct {
 	Category      Category
 	Scope         string
 	Source        string
+	SessionID     string
 	Limit         int
 	CreatedAfter  *time.Time
 	CreatedBefore *time.Time
 	Tags          []string
 }
 
-func (s *Store) List(opts ListOptions) ([]*Memory, error) {
+func (s *FileStore) List(opts ListOptions) ([]*Memory, error) {
 	var memories []*Memory
 
 	dirs := s.listDirs(opts)
@@ -192,7 +201,7 @@ func (s *Store) List(opts ListOptions) ([]*Memory, error) {
 	return memories, nil
 }
 
-func (s *Store) listDirs(opts ListOptions) []string {
+func (s *FileStore) listDirs(opts ListOptions) []string {
 	if opts.Category != "" {
 		dir := s.cfg.CategoryDir(string(opts.Category))
 		return []string{dir}
@@ -204,7 +213,7 @@ func (s *Store) listDirs(opts ListOptions) []string {
 	return dirs
 }
 
-func (s *Store) Tag(id string, add, remove []string) (*Memory, error) {
+func (s *FileStore) Tag(id string, add, remove []string) (*Memory, error) {
 	mem, err := s.findByID(id)
 	if err != nil {
 		return nil, err
@@ -232,7 +241,7 @@ func (s *Store) Tag(id string, add, remove []string) (*Memory, error) {
 	return mem, nil
 }
 
-func (s *Store) Upgrade(id string) error {
+func (s *FileStore) Upgrade(id string) error {
 	mem, err := s.findByID(id)
 	if err != nil {
 		return err
@@ -259,7 +268,7 @@ func (s *Store) Upgrade(id string) error {
 	return nil
 }
 
-func (s *Store) findByID(id string) (*Memory, error) {
+func (s *FileStore) findByID(id string) (*Memory, error) {
 	dirs := s.listDirs(ListOptions{})
 	for _, dir := range dirs {
 		path := filepath.Join(dir, id+".md")
@@ -271,18 +280,18 @@ func (s *Store) findByID(id string) (*Memory, error) {
 }
 
 // FindByID returns a memory by ID without incrementing access count.
-func (s *Store) FindByID(id string) (*Memory, error) {
+func (s *FileStore) FindByID(id string) (*Memory, error) {
 	return s.findByID(id)
 }
 
-func (s *Store) filePath(mem *Memory) string {
+func (s *FileStore) filePath(mem *Memory) string {
 	if mem.Category != "" && mem.Category != CategoryInbox {
 		return filepath.Join(s.cfg.CategoryDir(string(mem.Category)), mem.ID+".md")
 	}
 	return filepath.Join(s.dirForPhase(mem.Phase), mem.ID+".md")
 }
 
-func (s *Store) dirForPhase(p Phase) string {
+func (s *FileStore) dirForPhase(p Phase) string {
 	switch p {
 	case PhaseInbox:
 		return s.cfg.InboxDir()
@@ -309,7 +318,7 @@ type frontmatter struct {
 	Type string `yaml:"type,omitempty"`
 }
 
-func (s *Store) writeToFile(mem *Memory) error {
+func (s *FileStore) writeToFile(mem *Memory) error {
 	dir := s.fileDir(mem)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return err
@@ -351,14 +360,14 @@ func (s *Store) writeToFile(mem *Memory) error {
 	return os.Rename(tmpPath, path)
 }
 
-func (s *Store) fileDir(mem *Memory) string {
+func (s *FileStore) fileDir(mem *Memory) string {
 	if mem.Category != "" {
 		return s.cfg.CategoryDir(string(mem.Category))
 	}
 	return s.dirForPhase(mem.Phase)
 }
 
-func (s *Store) readFromFile(path string) (*Memory, error) {
+func (s *FileStore) readFromFile(path string) (*Memory, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
@@ -421,12 +430,12 @@ func defaultString(val, def string) string {
 	return val
 }
 
-func hashContent(content string) string {
+func HashContent(content string) string {
 	h := sha256.Sum256([]byte(content))
 	return fmt.Sprintf("%x", h)
 }
 
-func (s *Store) FindByHash(hash string) (*Memory, error) {
+func (s *FileStore) FindByHash(hash string) (*Memory, error) {
 	memories, err := s.List(ListOptions{})
 	if err != nil {
 		return nil, err

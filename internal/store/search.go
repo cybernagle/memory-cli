@@ -14,7 +14,7 @@ type SearchOptions struct {
 	To    *time.Time
 }
 
-func (s *Store) Search(opts SearchOptions) ([]*Memory, error) {
+func (s *FileStore) Search(opts SearchOptions) ([]*Memory, error) {
 	all, err := s.List(ListOptions{Phase: opts.Phase, Scope: opts.Scope})
 	if err != nil {
 		return nil, err

@@ -33,10 +33,17 @@ func init() {
 	rootCmd.Version = version
 }
 
-func getStore() (*store.Store, error) {
+func getStore() (store.Store, error) {
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
 		return nil, fmt.Errorf("load config: %w", err)
+	}
+	if cfg.Storage.Backend == "sqlite" {
+		s, err := store.NewSqliteStoreFromConfig(cfg)
+		if err != nil {
+			return nil, fmt.Errorf("open sqlite: %w", err)
+		}
+		return s, nil
 	}
 	s := store.New(cfg)
 	if err := s.Init(); err != nil {

@@ -8,7 +8,7 @@ import (
 )
 
 type MemoryDeleteTool struct {
-	store *store.Store
+	store store.Store
 }
 
 func (t *MemoryDeleteTool) Name() string { return "memory_delete" }

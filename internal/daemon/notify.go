@@ -23,7 +23,7 @@ func NewNotifyTask(cfg *config.Config) *NotifyTask {
 
 func (t *NotifyTask) Name() string { return "notify" }
 
-func (t *NotifyTask) Run(s *store.Store) (int, error) {
+func (t *NotifyTask) Run(s store.Store) (int, error) {
 	if !t.cfg.Notification.Enabled {
 		return 0, nil
 	}

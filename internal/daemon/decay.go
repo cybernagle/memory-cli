@@ -12,7 +12,7 @@ type DecayTask struct {
 
 func (t *DecayTask) Name() string { return "decay" }
 
-func (t *DecayTask) Run(s *store.Store) (int, error) {
+func (t *DecayTask) Run(s store.Store) (int, error) {
 	threshold := t.Threshold
 	if threshold == 0 {
 		threshold = 30 * 24 * time.Hour

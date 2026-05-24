@@ -10,7 +10,7 @@ type ConsolidateTask struct{}
 
 func (t *ConsolidateTask) Name() string { return "consolidate" }
 
-func (t *ConsolidateTask) Run(s *store.Store) (int, error) {
+func (t *ConsolidateTask) Run(s store.Store) (int, error) {
 	memories, err := s.List(store.ListOptions{})
 	if err != nil {
 		return 0, err

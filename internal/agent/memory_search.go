@@ -11,7 +11,7 @@ import (
 )
 
 type MemorySearchTool struct {
-	store *store.Store
+	store store.Store
 }
 
 func (t *MemorySearchTool) Name() string { return "memory_search" }

@@ -11,7 +11,7 @@ import (
 )
 
 type MemoryListTool struct {
-	store *store.Store
+	store store.Store
 }
 
 func (t *MemoryListTool) Name() string { return "memory_list" }

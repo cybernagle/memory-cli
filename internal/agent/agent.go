@@ -9,7 +9,7 @@ import (
 )
 
 type Agent struct {
-	store       *store.Store
+	store       store.Store
 	tools       map[string]Tool
 	hooks       Hooks
 	subscribers []chan Event
@@ -22,7 +22,7 @@ func WithHooks(h Hooks) Option {
 	return func(a *Agent) { a.hooks = h }
 }
 
-func New(s *store.Store, opts ...Option) *Agent {
+func New(s store.Store, opts ...Option) *Agent {
 	a := &Agent{
 		store: s,
 		tools: make(map[string]Tool),

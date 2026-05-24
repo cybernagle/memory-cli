@@ -8,7 +8,7 @@ import (
 	"github.com/cybernagle/memory-cli/internal/store"
 )
 
-func setupSession(t *testing.T) (*Session, *store.Store) {
+func setupSession(t *testing.T) (*Session, store.Store) {
 	t.Helper()
 	dir := t.TempDir()
 	cfg := &config.Config{

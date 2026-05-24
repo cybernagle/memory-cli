@@ -34,14 +34,21 @@ func (a *CarAgentAdapter) Ingest() ([]*store.Memory, error) {
 			if content == "" {
 				continue
 			}
-			memories = append(memories, &store.Memory{
-				Content:  truncate(content, 5000),
-				Phase:    store.PhaseOrganized,
-				Category: store.CategoryKnowledge,
-				Scope:    "global",
-				Tags:     []string{"car-agent"},
-				Source:   "car-agent",
-			})
+			chunks := chunkMarkdown(content, filepath.Base(f))
+			for _, chunk := range chunks {
+				tags := []string{"car-agent"}
+				if chunk.tag != "" {
+					tags = append(tags, chunk.tag)
+				}
+				memories = append(memories, &store.Memory{
+					Content:  chunk.content,
+					Phase:    store.PhaseOrganized,
+					Category: store.CategoryKnowledge,
+					Scope:    "global",
+					Tags:     tags,
+					Source:   "car-agent",
+				})
+			}
 		}
 	}
 

@@ -9,7 +9,7 @@ import (
 )
 
 type MemoryWriteTool struct {
-	store *store.Store
+	store store.Store
 }
 
 func (t *MemoryWriteTool) Name() string { return "memory_write" }

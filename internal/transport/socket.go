@@ -19,7 +19,7 @@ type SocketServer struct {
 	agent      *agent.Agent
 }
 
-func NewSocketServer(socketPath string, s *store.Store) *SocketServer {
+func NewSocketServer(socketPath string, s store.Store) *SocketServer {
 	a := agent.New(s)
 	agent.RegisterAll(a, s)
 	return &SocketServer{
