@@ -104,6 +104,11 @@ func (p *FactProcessor) Process(ctx context.Context, input plugin.ProcessInput) 
 				tags = m.Categories
 			}
 
+			// Resolve [[wiki-links]] into entities
+			if p.resolver != nil {
+				p.resolver.ResolveMentions(ctx, m.Content, "")
+			}
+
 			result.Results = append(result.Results, plugin.DataItem{
 				DataType:  plugin.DataEntity,
 				Operation: "create",

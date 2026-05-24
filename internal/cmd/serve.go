@@ -99,15 +99,9 @@ var serveCmd = &cobra.Command{
 		// Wire LLM processor if ANTHROPIC_API_KEY is available
 		if llmClient, err := llm.NewClient(llm.Config{}); err == nil {
 			if sqliteStore, ok := s.(*store.SqliteStore); ok {
-				d.WithProcessor(daemon.ProcessConfig{
-					SqliteStore: sqliteStore,
-					LLMClient:   llmClient,
-					Threshold:   100,
-				})
-				fmt.Println("LLM processor enabled (threshold: 100)")
 				d.AddTask(&daemon.ConsolidateLLMTask{Store: sqliteStore, LLM: llmClient})
 
-				// Wire plugin pipeline if enabled
+				// Use plugin pipeline if enabled, otherwise legacy processor
 				if cfg.Pipeline.Enabled {
 					pipelineReg = plugin.NewRegistry()
 					entityComp := entity.NewEntityComponent()
@@ -136,6 +130,13 @@ var serveCmd = &cobra.Command{
 						d.AddTask(&daemon.PipelineTask{Engine: engine, Threshold: threshold})
 						fmt.Printf("Plugin pipeline enabled (threshold: %d)\n", threshold)
 					}
+				} else {
+					d.WithProcessor(daemon.ProcessConfig{
+						SqliteStore: sqliteStore,
+						LLMClient:   llmClient,
+						Threshold:   100,
+					})
+					fmt.Println("LLM processor enabled (threshold: 100)")
 				}
 			}
 		} else {
