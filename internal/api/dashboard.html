@@ -100,6 +100,7 @@ a{color:var(--primary);cursor:pointer}
 .cat-reminders{background:#5f2a1e;color:#f87171}
 .phase-inbox{color:var(--orange)}
 .phase-organized{color:var(--green)}
+.phase-processed{color:var(--text2)}
 /* Plugin cards */
 .plugin-card{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:8px}
 .plugin-card .pname{font-size:13px;font-weight:600;display:flex;align-items:center;gap:6px}
@@ -152,6 +153,7 @@ a{color:var(--primary);cursor:pointer}
     <button class="nav-tab active" data-page="overview" onclick="showPage('overview',this)">Overview</button>
     <button class="nav-tab" data-page="inbox" onclick="showPage('inbox',this)">Inbox</button>
     <button class="nav-tab" data-page="longterm" onclick="showPage('longterm',this)">Long-term</button>
+    <button class="nav-tab" data-page="processed" onclick="showPage('processed',this)">Processed</button>
     <button class="nav-tab" data-page="histogram" onclick="showPage('histogram',this)">Histogram</button>
     <button class="nav-tab" data-page="agg" onclick="showPage('agg',this)">Aggregation</button>
     <button class="nav-tab" data-page="plugins" onclick="showPage('plugins',this)">Plugins</button>
@@ -207,6 +209,25 @@ a{color:var(--primary);cursor:pointer}
       </select>
     </div>
     <div class="mem-list" id="lt-list"></div>
+  </div>
+
+  <!-- Processed (已处理原始记忆) -->
+  <div class="page" id="page-processed">
+    <div class="mem-toolbar">
+      <input class="mem-search" id="proc-search" placeholder="Search processed..." onkeydown="if(event.key==='Enter'){procPage=1;loadProcessed()}">
+      <select class="mem-filter" id="proc-cat" onchange="procPage=1;loadProcessed()">
+        <option value="">All</option><option value="knowledge">Knowledge</option><option value="people">People</option>
+        <option value="project">Project</option><option value="preferences">Preferences</option>
+        <option value="conversations">Conversations</option><option value="claude">Claude</option>
+        <option value="fingersaver">FingerSaver</option><option value="car-agent">Car-Agent</option>
+      </select>
+      <select class="mem-filter" id="proc-source" onchange="procPage=1;loadProcessed()">
+        <option value="">All Sources</option><option value="claude">Claude</option><option value="conversations">Conversations</option>
+        <option value="car-agent">Car-Agent</option><option value="fingersaver">FingerSaver</option>
+        <option value="logseq">Logseq</option><option value="obsidian">Obsidian</option>
+      </select>
+    </div>
+    <div class="mem-list" id="proc-list"></div>
   </div>
 
   <!-- Histogram -->
@@ -266,6 +287,24 @@ a{color:var(--primary);cursor:pointer}
 
 <script>
 let inboxPage=1, ltPage=1;
+
+let procPage=1;
+async function loadProcessed(){
+  const q=document.getElementById('proc-search').value;
+  const cat=document.getElementById('proc-cat').value;
+  const src=document.getElementById('proc-source').value;
+  let url=`/memories?phase=processed&limit=${PS}`;
+  if(q) url+=`&q=${encodeURIComponent(q)}`;
+  if(cat) url+=`&category=${cat}`;
+  if(src) url+=`&source=${src}`;
+  try{
+    const r=await fetch(url);
+    const d=await r.json();
+    renderMemList('proc-list',d.memories||[],false);
+  }catch(e){document.getElementById('proc-list').innerHTML='<p class="empty">Failed to load</p>';}
+}
+
+
 const PS=30;
 
 function showPage(name,btn){
@@ -275,6 +314,7 @@ function showPage(name,btn){
   document.getElementById('page-'+name).classList.add('active');
   if(name==='inbox') loadInbox();
   if(name==='longterm') loadLT();
+  if(name==='processed') loadProcessed();
   if(name==='histogram') loadHisto();
   if(name==='agg') loadAgg();
   if(name==='plugins') loadPlugins();
