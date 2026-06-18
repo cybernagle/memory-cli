@@ -42,6 +42,7 @@ var ingestCmd = &cobra.Command{
 				continue
 			}
 			count := 0
+			updated := 0
 			for _, mem := range memories {
 				hash := contentHash(mem.Content)
 				existing, err := s.FindByHash(hash)
@@ -49,21 +50,27 @@ var ingestCmd = &cobra.Command{
 					fmt.Fprintf(os.Stderr, "Error checking dedup for %s: %v\n", name, err)
 					continue
 				}
-				if existing != nil {
-					continue
-				}
+				// Even when the memory already exists, we still call IngestMemory: the store's
+				// upsert path backfills any provenance columns (role, git_branch, prompt_id,
+				// message_uuid, ...) that are empty on the existing row but present in this
+				// (richer) ingest. Re-importing is therefore idempotent AND progressively
+				// enriches older data as ingest code captures more fields.
 				if err := s.IngestMemory(mem); err != nil {
 					fmt.Fprintf(os.Stderr, "Error writing memory from %s: %v\n", name, err)
 					continue
 				}
-				count++
-			}
-			if count > 0 {
-				if ss, ok := s.(*store.SqliteStore); ok {
-					ss.LogActivity("ingest", "", name, fmt.Sprintf("%d memories", count))
+				if existing != nil {
+					updated++
+				} else {
+					count++
 				}
 			}
-			fmt.Printf("Ingested %d memories from %s\n", count, name)
+			if count+updated > 0 {
+				if ss, ok := s.(*store.SqliteStore); ok {
+					ss.LogActivity("ingest", "", name, fmt.Sprintf("%d new, %d updated", count, updated))
+				}
+			}
+			fmt.Printf("Ingested %d memories from %s (%d updated)\n", count, name, updated)
 			total += count
 		}
 		fmt.Printf("\nTotal: %d new memories ingested\n", total)

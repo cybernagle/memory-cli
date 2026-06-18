@@ -76,17 +76,57 @@ func parseJSONL(path, project, defaultSessionID string, isSubagentFile bool) []*
 	}
 	defer f.Close()
 
-	var memories []*store.Memory
+	// Two passes:
+	// Pass 1 — build a uuid → (parentUuid, promptId) index over EVERY entry (not just user/
+	// assistant). Claude only stamps promptId on user turns; assistant turns must inherit it by
+	// walking their parentUuid chain back to the originating user prompt. System/attachment
+	// entries sit on that chain, so they must be indexed too.
 	scanner := bufio.NewScanner(f)
 	buf := make([]byte, 0, 1024*1024)
 	scanner.Buffer(buf, 4*1024*1024)
 
+	type linkInfo struct {
+		parentUUID string
+		promptID   string
+	}
+	uuidIndex := make(map[string]linkInfo, 4096)
+	var rawEntries []jsonlEntry
 	for scanner.Scan() {
 		var entry jsonlEntry
 		if err := json.Unmarshal(scanner.Bytes(), &entry); err != nil {
 			continue
 		}
+		rawEntries = append(rawEntries, entry)
+		if entry.UUID != "" {
+			uuidIndex[entry.UUID] = linkInfo{parentUUID: entry.ParentUUID, promptID: entry.PromptID}
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return nil
+	}
 
+	// resolvePromptID walks the parent chain to find the nearest ancestor carrying a promptId.
+	// Claude stamps promptId only on user turns; assistant/tool/system entries inherit it.
+	// Guarded against cycles with a visited set (parentUuid chains should be acyclic, but a
+	// corrupted transcript shouldn't loop forever).
+	var resolvePromptID func(uuid string, visited map[string]bool) string
+	resolvePromptID = func(uuid string, visited map[string]bool) string {
+		if uuid == "" || visited[uuid] {
+			return ""
+		}
+		visited[uuid] = true
+		info, ok := uuidIndex[uuid]
+		if !ok {
+			return ""
+		}
+		if info.promptID != "" {
+			return info.promptID
+		}
+		return resolvePromptID(info.parentUUID, visited)
+	}
+
+	var memories []*store.Memory
+	for _, entry := range rawEntries {
 		// Only user/assistant turns carry recallable content. Skip system/attachment/summary-meta/
 		// file-history/etc. entries (they are transcript bookkeeping, not memory material).
 		if entry.Type != "user" && entry.Type != "assistant" {
@@ -104,6 +144,12 @@ func parseJSONL(path, project, defaultSessionID string, isSubagentFile bool) []*
 		sessionID := entry.SessionID
 		if sessionID == "" {
 			sessionID = defaultSessionID
+		}
+
+		// Inherit promptId from the parent chain when this entry lacks one (assistant turns).
+		promptID := entry.PromptID
+		if promptID == "" {
+			promptID = resolvePromptID(entry.UUID, map[string]bool{})
 		}
 
 		role := entry.Type
@@ -163,7 +209,7 @@ func parseJSONL(path, project, defaultSessionID string, isSubagentFile bool) []*
 			Role:        role,
 			GitBranch:   entry.GitBranch,
 			Model:       entry.Message.Model,
-			PromptID:    entry.PromptID,
+			PromptID:    promptID,
 		})
 	}
 

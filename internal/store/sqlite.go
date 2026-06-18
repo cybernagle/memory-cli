@@ -786,6 +786,55 @@ func (s *SqliteStore) InsertMemory(mem *Memory) error {
 		categoryVal = CategorizeContent(mem.Content)
 	}
 
+	// Upsert by content_hash: if an identical-content memory already exists, do NOT insert a
+	// duplicate. Instead, backfill any provenance columns that are empty on the existing row
+	// (role, git_branch, message_uuid, parent_uuid, model, prompt_id, session_id, project) from
+	// the incoming memory. This makes re-ingest safe (no duplicates) AND progressively enriches
+	// older memories with provenance captured by newer ingest code. Non-provenance fields
+	// (phase, tags, processed_by, consumed_mask) are deliberately left untouched — the existing
+	// memory's processing state is authoritative.
+	var existingID string
+	err = tx.QueryRow("SELECT id FROM memories WHERE content_hash = ? LIMIT 1", mem.ContentHash).Scan(&existingID)
+	if err == nil && existingID != "" {
+		// Existing memory found — update only the provenance columns, preserving prior values
+		// where the incoming memory carries richer info than what's stored. Each `SET col = ?
+		// WHERE col = ''` keeps any non-empty existing value, so re-ingest never clobbers.
+		if _, err = tx.Exec(`UPDATE memories SET
+				session_id   = CASE WHEN session_id   = '' AND ? != '' THEN ? ELSE session_id END,
+				project      = CASE WHEN project      = '' AND ? != '' THEN ? ELSE project END,
+				message_uuid = CASE WHEN message_uuid = '' AND ? != '' THEN ? ELSE message_uuid END,
+				parent_uuid  = CASE WHEN parent_uuid  = '' AND ? != '' THEN ? ELSE parent_uuid END,
+				role         = CASE WHEN role         = '' AND ? != '' THEN ? ELSE role END,
+				git_branch   = CASE WHEN git_branch   = '' AND ? != '' THEN ? ELSE git_branch END,
+				model        = CASE WHEN model        = '' AND ? != '' THEN ? ELSE model END,
+				prompt_id    = CASE WHEN prompt_id    = '' AND ? != '' THEN ? ELSE prompt_id END
+			WHERE id = ?`,
+			mem.SessionID, mem.SessionID,
+			mem.Project, mem.Project,
+			mem.MessageUUID, mem.MessageUUID,
+			mem.ParentUUID, mem.ParentUUID,
+			mem.Role, mem.Role,
+			mem.GitBranch, mem.GitBranch,
+			mem.Model, mem.Model,
+			mem.PromptID, mem.PromptID,
+			existingID); err != nil {
+			tx.Rollback()
+			return err
+		}
+		// Adopt the existing ID so the caller's mem reflects the row we touched, and re-enrich
+		// tags (new ingest may carry new provenance tags like "subagent" the old row lacks).
+		mem.ID = existingID
+		tagsToInsert := mergeTags(mem.Tags, ExtractKeywords(mem.Content))
+		for _, tag := range tagsToInsert {
+			if _, err = tx.Exec("INSERT OR IGNORE INTO tags (memory_id, tag) VALUES (?, ?)", mem.ID, tag); err != nil {
+				tx.Rollback()
+				return err
+			}
+		}
+		return tx.Commit()
+	}
+	// No existing memory (or query error) → fall through to a fresh INSERT.
+
 	_, err = tx.Exec(`INSERT INTO memories (id, content, content_hash, phase, category, scope, source, session_id, created_at, updated_at, expires_at, access_count, version, processed_by, raw_entry_id, project, consumed_mask, message_uuid, parent_uuid, role, git_branch, model, prompt_id)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		mem.ID, mem.Content, mem.ContentHash, string(mem.Phase), string(categoryVal),
