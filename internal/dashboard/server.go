@@ -5,6 +5,8 @@ import (
 	"io/fs"
 	"net/http"
 	"time"
+
+	"github.com/cybernagle/memory-cli/internal/llm"
 )
 
 //go:embed assets/*
@@ -12,21 +14,26 @@ var assetsFS embed.FS
 
 type Server struct {
 	store *storeWrapper
+	llm   *llm.Client
 	mux   *http.ServeMux
 }
 
-func NewServer(s Store) *Server {
+func NewServer(s Store, llmClient *llm.Client) *Server {
 	srv := &Server{
 		store: &storeWrapper{impl: s},
+		llm:   llmClient,
 	}
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /api/stats", srv.handleStats)
+	mux.HandleFunc("GET /api/heatmap", srv.handleHeatmap)
 	mux.HandleFunc("GET /api/memories/{id}/links", srv.handleLinks)
 	mux.HandleFunc("GET /api/memories/{id}", srv.handleMemoryDetail)
 	mux.HandleFunc("GET /api/memories", srv.handleMemories)
 	mux.HandleFunc("GET /api/search", srv.handleSearch)
 	mux.HandleFunc("GET /api/graph", srv.handleGraph)
+	mux.HandleFunc("POST /api/ask", srv.handleAsk)
+	mux.HandleFunc("POST /api/ask/agent", srv.handleAskAgent)
 	mux.HandleFunc("GET /", srv.handleIndex)
 
 	srv.mux = mux
@@ -38,7 +45,7 @@ func (srv *Server) ListenAndServe(addr string) error {
 		Addr:         addr,
 		Handler:      srv.mux,
 		ReadTimeout:  15 * time.Second,
-		WriteTimeout: 30 * time.Second,
+		WriteTimeout: 120 * time.Second,
 		IdleTimeout:  60 * time.Second,
 	}
 	return server.ListenAndServe()

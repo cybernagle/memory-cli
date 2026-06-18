@@ -39,6 +39,13 @@ a:hover { text-decoration: underline; }
 }
 .header h1 { font-size: 18px; font-weight: 600; }
 .header h1 span { color: var(--primary); }
+.header-tabs { display: flex; gap: 4px; }
+.header-tab {
+  font-size: 13px; padding: 6px 16px; border-radius: 6px;
+  background: transparent; color: var(--text2); border: none; cursor: pointer;
+}
+.header-tab:hover { color: var(--text); }
+.header-tab.active { background: var(--primary2); color: #fff; }
 
 .search-box {
   display: flex; align-items: center; gap: 8px;
@@ -173,21 +180,145 @@ a:hover { text-decoration: underline; }
 }
 .tag-item:hover { border-color: var(--primary); color: var(--text); }
 .tag-item .tag-count { color: var(--primary); margin-left: 4px; }
+
+.search-view { display: none; }
+.search-view.active { display: block; }
+.overview-view { display: block; }
+.overview-view.hidden { display: none; }
+
+.search-filters {
+  display: flex; gap: 10px; flex-wrap: wrap; align-items: center;
+  margin-bottom: 16px; padding: 16px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+}
+.search-filters select, .search-filters input {
+  background: var(--surface2); border: 1px solid var(--border);
+  color: var(--text); padding: 8px 12px; border-radius: 6px; font-size: 13px;
+}
+.search-filters select { min-width: 120px; }
+.search-filters .search-query { flex: 1; min-width: 200px; }
+.search-filters .search-btn {
+  background: var(--primary2); color: #fff; border: none;
+  padding: 8px 20px; border-radius: 6px; cursor: pointer; font-size: 13px;
+}
+.search-filters .search-btn:hover { background: var(--primary); }
+
+.pagination {
+  display: flex; justify-content: center; align-items: center; gap: 8px;
+  margin-top: 16px;
+}
+.pagination button {
+  background: var(--surface2); color: var(--text2); border: 1px solid var(--border);
+  padding: 6px 14px; border-radius: 6px; cursor: pointer; font-size: 13px;
+}
+.pagination button:hover:not(:disabled) { border-color: var(--primary); color: var(--text); }
+.pagination button:disabled { opacity: 0.4; cursor: default; }
+.pagination .page-info { font-size: 13px; color: var(--text2); }
+.search-count { font-size: 13px; color: var(--text2); margin-bottom: 12px; }
+
+.chat-view { display: none; }
+.chat-view.active { display: flex; flex-direction: column; height: calc(100vh - 80px); }
+.chat-messages {
+  flex: 1; overflow-y: auto; padding: 16px 0;
+  display: flex; flex-direction: column; gap: 16px;
+}
+.chat-msg { max-width: 85%; }
+.chat-msg.user { align-self: flex-end; }
+.chat-msg.assistant { align-self: flex-start; }
+.chat-bubble {
+  padding: 12px 16px; border-radius: 12px; font-size: 14px;
+  line-height: 1.6; white-space: pre-wrap; word-break: break-word;
+}
+.chat-msg.user .chat-bubble {
+  background: var(--primary2); color: #fff;
+  border-bottom-right-radius: 4px;
+}
+.chat-msg.assistant .chat-bubble {
+  background: var(--surface); border: 1px solid var(--border);
+  border-bottom-left-radius: 4px;
+}
+.chat-sources {
+  margin-top: 8px; padding: 8px 12px;
+  background: var(--surface2); border-radius: 8px;
+  font-size: 12px; color: var(--text2);
+}
+.chat-sources summary { cursor: pointer; color: var(--primary); font-size: 12px; }
+.chat-source-item { padding: 4px 0; border-bottom: 1px solid var(--border); }
+.chat-source-item:last-child { border: none; }
+.agent-steps { margin-bottom: 10px; border-left: 2px solid var(--border); padding-left: 12px; }
+.agent-step { font-size: 12px; color: var(--text2); padding: 3px 0; display: flex; gap: 8px; align-items: baseline; }
+.step-badge { font-size: 10px; font-weight: 600; padding: 1px 6px; border-radius: 3px; text-transform: uppercase; letter-spacing: 0.3px; white-space: nowrap; }
+.step-badge.think { background: var(--surface2); color: var(--purple); }
+.step-badge.search { background: var(--surface2); color: var(--primary); }
+.step-badge.observe { background: var(--surface2); color: var(--cyan); }
+.step-badge.answer { background: var(--surface2); color: var(--green); }
+.step-text { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.step-count { color: var(--primary); font-size: 11px; white-space: nowrap; }
+.agent-answer { font-size: 14px; color: var(--text); line-height: 1.6; white-space: pre-wrap; word-break: break-word; }
+.agent-answer:empty { display: none; }
+.chat-input-area {
+  display: flex; flex-direction: column; gap: 8px; padding-top: 12px;
+  border-top: 1px solid var(--border); margin-top: 8px;
+}
+.chat-input-row { display: flex; gap: 8px; }
+.chat-input-row input {
+  flex: 1; background: var(--surface2); border: 1px solid var(--border);
+  color: var(--text); padding: 12px 16px; border-radius: 8px;
+  font-size: 14px; outline: none;
+}
+.chat-input-row input:focus { border-color: var(--primary); }
+.chat-input-row button {
+  background: var(--primary2); color: #fff; border: none;
+  padding: 12px 24px; border-radius: 8px; cursor: pointer; font-size: 14px;
+}
+.chat-input-row button:hover { background: var(--primary); }
+.chat-input-row button:disabled { opacity: 0.5; cursor: default; }
+.chat-context-bar {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 12px; color: var(--text2); padding: 0 4px;
+}
+.context-label { font-weight: 600; }
+.context-tokens { font-weight: 700; color: var(--primary); }
+.context-unit { color: var(--text2); }
+.context-slider {
+  flex: 1; max-width: 200px; height: 4px; -webkit-appearance: none;
+  background: var(--border); border-radius: 2px; outline: none;
+}
+.context-slider::-webkit-slider-thumb {
+  -webkit-appearance: none; width: 14px; height: 14px;
+  background: var(--primary2); border-radius: 50%; cursor: pointer;
+}
+.context-budget { font-weight: 600; min-width: 30px; }
+.context-clear {
+  background: none; border: 1px solid var(--border); color: var(--text2);
+  padding: 2px 10px; border-radius: 4px; cursor: pointer; font-size: 11px;
+}
+.context-clear:hover { border-color: #e55; color: #e55; }
+.chat-typing { color: var(--text2); font-size: 13px; padding: 4px 0; }
+.growth-chart-container {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 10px; padding: 20px; margin-bottom: 16px;
+}
+.growth-chart-container h2 {
+  font-size: 13px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.5px; color: var(--text2); margin-bottom: 12px;
+}
 </style>
 </head>
 <body>
 
 <div class="header">
   <h1><span>Memory</span> Dashboard</h1>
-  <div class="search-box">
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-      <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
-    </svg>
-    <input type="text" id="searchInput" placeholder="Search memories..." />
+  <div class="header-tabs">
+    <button class="header-tab active" data-tab="overview">Overview</button>
+    <button class="header-tab" data-tab="search">Search</button>
+    <button class="header-tab" data-tab="chat">Chat</button>
   </div>
 </div>
 
 <div class="container">
+  <!-- Overview View -->
+  <div class="overview-view" id="overviewView">
   <div class="grid">
     <div class="card">
       <h2>Phase Overview</h2>
@@ -219,6 +350,17 @@ a:hover { text-decoration: underline; }
       <div style="position:relative;height:260px">
         <canvas id="categoryChart"></canvas>
       </div>
+    </div>
+    <div class="card">
+      <h2>Projects</h2>
+      <div class="tag-cloud" id="projectCloud"></div>
+    </div>
+  </div>
+
+  <div class="growth-chart-container grid-full">
+    <h2>Memory Growth</h2>
+    <div style="position:relative;height:200px">
+      <canvas id="growthChart"></canvas>
     </div>
   </div>
 
@@ -252,14 +394,95 @@ a:hover { text-decoration: underline; }
     <h2>Link Graph <span style="font-weight:400;font-size:12px" id="graphStats"></span></h2>
     <canvas class="graph-canvas" id="graphCanvas"></canvas>
   </div>
-</div>
+  </div><!-- end overviewView -->
+
+  <!-- Search View -->
+  <div class="search-view" id="searchView">
+    <div class="search-filters">
+      <input type="text" class="search-query" id="sqQuery" placeholder="Search by keyword..." />
+      <select id="sqPhase">
+        <option value="">All Phases</option>
+        <option value="inbox">Inbox</option>
+        <option value="processed">Processed</option>
+        <option value="organized">Organized</option>
+      </select>
+      <select id="sqCategory"><option value="">All Categories</option></select>
+      <select id="sqSource"><option value="">All Sources</option></select>
+      <button class="search-btn" id="sqBtn">Search</button>
+    </div>
+    <div class="search-count" id="sqCount"></div>
+    <div class="memories-list" id="sqResults">
+      <div class="empty-state">Enter a query or set filters to search memories</div>
+    </div>
+    <div class="pagination" id="sqPagination"></div>
+  </div>
+
+  <!-- Chat View -->
+  <div class="chat-view" id="chatView">
+    <div class="chat-messages" id="chatMessages">
+      <div class="chat-msg assistant">
+        <div class="chat-bubble">Ask me anything about your memories. I'll answer based on what you've stored.</div>
+      </div>
+    </div>
+    <div class="chat-input-area">
+      <div class="chat-context-bar">
+        <span class="context-label">Context:</span>
+        <span class="context-tokens" id="contextTokenCount">0</span>
+        <span class="context-unit">tokens</span>
+        <input type="range" id="contextBudget" min="2000" max="40000" step="2000" value="20000" class="context-slider" />
+        <span class="context-budget" id="contextBudgetLabel">20k</span>
+        <button class="context-clear" id="contextClear" title="Clear conversation history">Clear</button>
+      </div>
+      <div class="chat-input-row">
+        <input type="text" id="chatInput" placeholder="Ask about your memories..." />
+        <button id="chatSend">Send</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="detail-panel" id="detailPanel">
 
 <script>
 const API = '';
 let currentFilter = 'all';
+let currentTab = 'overview';
 let allMemories = [];
 let categoryChart = null;
+let growthChart = null;
 let graphAnimId = null;
+let searchPage = 1;
+const PAGE_SIZE = 50;
+let searchCategories = {};
+let searchSources = {};
+let chatLoading = false;
+let chatHistory = []; // [{role:"user"/"assistant", content:"..."}]
+
+function estimateTokens(text) {
+  // Rough: 1 token per 3 chars (mixed EN/CJK average)
+  return Math.ceil(text.length / 3);
+}
+
+function updateContextDisplay() {
+  var total = 0;
+  for (var i = 0; i < chatHistory.length; i++) {
+    total += estimateTokens(chatHistory[i].content);
+  }
+  var el = document.getElementById('contextTokenCount');
+  if (el) el.textContent = total >= 1000 ? (total / 1000).toFixed(1) + 'k' : total;
+}
+
+function getHistoryForAPI() {
+  var budget = parseInt(document.getElementById('contextBudget').value) || 20000;
+  var budgetChars = budget * 3; // reverse estimate
+  var total = 0;
+  var start = chatHistory.length;
+  for (var i = chatHistory.length - 1; i >= 0; i--) {
+    total += chatHistory[i].content.length;
+    if (total > budgetChars) break;
+    start = i;
+  }
+  return chatHistory.slice(start);
+}
 
 const CATEGORY_COLORS = {
   soul:'#a78bfa', character:'#c084fc', people:'#f472b6', project:'#6c8aff',
@@ -305,7 +528,13 @@ async function loadStats() {
     return '<span class="tag-item" data-tag="' + escAttr(t[0]) + '">' + esc(t[0]) + '<span class="tag-count">' + t[1] + '</span></span>';
   }).join('');
 
+  const projects = Object.entries(stats.projects || {}).sort((a,b) => b[1]-a[1]).slice(0,24);
+  document.getElementById('projectCloud').innerHTML = projects.map(function(p) {
+    return '<span class="tag-item" data-project="' + escAttr(p[0]) + '">' + esc(p[0]) + '<span class="tag-count">' + p[1] + '</span></span>';
+  }).join('') || '<span class="muted">No projects yet</span>';
+
   renderChart(stats.categories);
+  loadGrowthChart();
 }
 
 function renderChart(categories) {
@@ -339,8 +568,16 @@ function renderChart(categories) {
 }
 
 async function loadMemories() {
-  const data = await fetchJSON('/api/memories?limit=100');
+  const data = await fetchJSON('/api/memories?limit=200');
   allMemories = data.memories || [];
+  // Sort: organized first, then processed, then inbox; within each phase by time desc
+  const phaseOrder = {organized: 0, processed: 1, inbox: 2};
+  allMemories.sort(function(a,b) {
+    var pa = phaseOrder[a.phase] !== undefined ? phaseOrder[a.phase] : 9;
+    var pb = phaseOrder[b.phase] !== undefined ? phaseOrder[b.phase] : 9;
+    if (pa !== pb) return pa - pb;
+    return new Date(b.created_at) - new Date(a.created_at);
+  });
   renderMemories();
   if (allMemories.length > 0) loadGraph().catch(function(err) { console.warn('graph:', err); });
 }
@@ -377,7 +614,16 @@ function setFilter(btn) {
   document.querySelectorAll('.filter-btn').forEach(function(b) { b.classList.remove('active'); });
   btn.classList.add('active');
   currentFilter = btn.dataset.filter;
-  renderMemories();
+  // Fetch phase-specific data when filtering
+  if (currentFilter === 'all') {
+    loadMemories();
+  } else {
+    fetchJSON('/api/memories?phase=' + currentFilter + '&limit=200').then(function(data) {
+      allMemories = data.memories || [];
+      allMemories.sort(function(a,b) { return new Date(b.created_at) - new Date(a.created_at); });
+      renderMemories();
+    });
+  }
 }
 
 async function showDetail(id) {
@@ -451,15 +697,164 @@ async function searchMemories(query) {
   }).join('');
 }
 
-function searchByTag(tag) {
-  document.getElementById('searchInput').value = tag;
-  searchMemories(tag);
+document.getElementById('tagCloud').addEventListener('click', function(e) {
+  var item = e.target.closest('.tag-item');
+  if (item) { switchTab('search'); document.getElementById('sqQuery').value = item.dataset.tag; runSearch(1); }
+});
+
+document.getElementById('projectCloud').addEventListener('click', function(e) {
+  var item = e.target.closest('.tag-item');
+  if (item) { switchTab('search'); document.getElementById('sqQuery').value = item.dataset.project; runSearch(1); }
+});
+
+// Tab switching
+function switchTab(tab) {
+  currentTab = tab;
+  document.querySelectorAll('.header-tab').forEach(function(t) { t.classList.toggle('active', t.dataset.tab === tab); });
+  document.getElementById('overviewView').classList.toggle('hidden', tab !== 'overview');
+  document.getElementById('searchView').classList.toggle('active', tab === 'search');
+  document.getElementById('chatView').classList.toggle('active', tab === 'chat');
+  if (tab === 'search' && !document.getElementById('sqCategory').dataset.loaded) {
+    loadSearchFilters();
+  }
+  if (tab === 'chat') {
+    document.getElementById('chatInput').focus();
+  }
 }
 
-document.getElementById('searchInput').addEventListener('keydown', function(e) {
-  if (e.key === 'Enter') searchMemories(e.target.value);
-  if (e.key === 'Escape') { e.target.value = ''; loadMemories(); }
+document.querySelector('.header-tabs').addEventListener('click', function(e) {
+  var tab = e.target.closest('.header-tab');
+  if (tab) switchTab(tab.dataset.tab);
 });
+
+// Search view logic
+async function loadSearchFilters() {
+  try {
+    var stats = await fetchJSON('/api/stats');
+    var catSel = document.getElementById('sqCategory');
+    var srcSel = document.getElementById('sqSource');
+    Object.keys(stats.categories || {}).sort().forEach(function(c) {
+      var o = document.createElement('option'); o.value = c; o.textContent = c + ' (' + stats.categories[c] + ')'; catSel.appendChild(o);
+    });
+    Object.keys(stats.sources || {}).sort().forEach(function(s) {
+      var o = document.createElement('option'); o.value = s; o.textContent = s + ' (' + stats.sources[s] + ')'; srcSel.appendChild(o);
+    });
+    catSel.dataset.loaded = 'true';
+  } catch(e) { console.warn('loadSearchFilters:', e); }
+}
+
+async function runSearch(page) {
+  searchPage = page || 1;
+  var query = document.getElementById('sqQuery').value.trim();
+  var phase = document.getElementById('sqPhase').value;
+  var category = document.getElementById('sqCategory').value;
+  var source = document.getElementById('sqSource').value;
+  var list = document.getElementById('sqResults');
+
+  list.innerHTML = '<div class="empty-state">Searching...</div>';
+
+  try {
+    var data;
+    if (query) {
+      var url = '/api/search?q=' + encodeURIComponent(query);
+      if (phase) url += '&phase=' + phase;
+      data = await fetchJSON(url);
+      var mems = data.results || [];
+      if (phase) mems = mems.filter(function(m) { return m.phase === phase; });
+      if (category) mems = mems.filter(function(m) { return m.category === category; });
+      if (source) mems = mems.filter(function(m) { return m.source === source; });
+      renderSearchResults(mems, query);
+    } else {
+      var url = '/api/memories?limit=1000';
+      if (phase) url += '&phase=' + phase;
+      if (category) url += '&category=' + category;
+      if (source) url += '&source=' + source;
+      data = await fetchJSON(url);
+      renderSearchResults(data.memories || []);
+    }
+  } catch(e) {
+    list.innerHTML = '<div class="empty-state">Search failed: ' + esc(e.message) + '</div>';
+  }
+}
+
+function renderSearchResults(mems, highlight) {
+  var list = document.getElementById('sqResults');
+  var countEl = document.getElementById('sqCount');
+  var total = mems.length;
+
+  countEl.textContent = total + ' memories found';
+
+  if (total === 0) {
+    list.innerHTML = '<div class="empty-state">No results</div>';
+    document.getElementById('sqPagination').innerHTML = '';
+    return;
+  }
+
+  mems.sort(function(a,b) { return new Date(b.created_at) - new Date(a.created_at); });
+
+  var start = (searchPage - 1) * PAGE_SIZE;
+  var end = Math.min(start + PAGE_SIZE, total);
+  var pageMems = mems.slice(start, end);
+
+  list.innerHTML = pageMems.map(function(m) {
+    var content = m.content.length > 200 ? m.content.slice(0,200) + '...' : m.content;
+    var firstLine = content.split('\n')[0];
+    var color = CATEGORY_COLORS[m.category] || '#6c8aff';
+    return '<div class="mem-card" data-id="' + escAttr(m.id) + '">' +
+      '<div class="mem-header">' +
+        '<span class="mem-cat" style="background:' + color + '">' + esc(m.category) + '</span>' +
+        '<span class="mem-phase">' + esc(m.phase) + '</span>' +
+        '<span class="mem-time">' + timeAgo(m.created_at) + '</span>' +
+        '<span style="font-size:11px;color:var(--text2);margin-left:8px">' + esc(m.source || '') + '</span>' +
+      '</div>' +
+      '<div class="mem-content truncated">' + esc(firstLine) + '</div>' +
+    '</div>';
+  }).join('');
+
+  // Store all results for pagination
+  window._searchResults = mems;
+  renderPagination(total);
+}
+
+function renderPagination(total) {
+  var pages = Math.ceil(total / PAGE_SIZE);
+  var el = document.getElementById('sqPagination');
+  if (pages <= 1) { el.innerHTML = ''; return; }
+
+  var html = '<button ' + (searchPage <= 1 ? 'disabled' : '') + ' onclick="goSearchPage(' + (searchPage-1) + ')">Prev</button>';
+  html += '<span class="page-info">Page ' + searchPage + ' of ' + pages + '</span>';
+  html += '<button ' + (searchPage >= pages ? 'disabled' : '') + ' onclick="goSearchPage(' + (searchPage+1) + ')">Next</button>';
+  el.innerHTML = html;
+}
+
+function goSearchPage(page) {
+  var mems = window._searchResults || [];
+  var start = (page - 1) * PAGE_SIZE;
+  if (start >= mems.length) return;
+  searchPage = page;
+  var end = Math.min(start + PAGE_SIZE, mems.length);
+  var pageMems = mems.slice(start, end);
+  var list = document.getElementById('sqResults');
+  list.innerHTML = pageMems.map(function(m) {
+    var content = m.content.length > 200 ? m.content.slice(0,200)+'...' : m.content;
+    var firstLine = content.split('\n')[0];
+    var color = CATEGORY_COLORS[m.category] || '#6c8aff';
+    return '<div class="mem-card" data-id="' + escAttr(m.id) + '">' +
+      '<div class="mem-header">' +
+        '<span class="mem-cat" style="background:' + color + '">' + esc(m.category) + '</span>' +
+        '<span class="mem-phase">' + esc(m.phase) + '</span>' +
+        '<span class="mem-time">' + timeAgo(m.created_at) + '</span>' +
+        '<span style="font-size:11px;color:var(--text2);margin-left:8px">' + esc(m.source || '') + '</span>' +
+      '</div>' +
+      '<div class="mem-content truncated">' + esc(firstLine) + '</div>' +
+    '</div>';
+  }).join('');
+  renderPagination(mems.length);
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+document.getElementById('sqBtn').addEventListener('click', function() { runSearch(1); });
+document.getElementById('sqQuery').addEventListener('keydown', function(e) { if (e.key === 'Enter') runSearch(1); });
 
 // Event delegation
 document.getElementById('memoriesList').addEventListener('click', function(e) {
@@ -470,9 +865,12 @@ document.getElementById('memoriesList').addEventListener('click', function(e) {
   showDetail(card.dataset.id);
 });
 
-document.getElementById('tagCloud').addEventListener('click', function(e) {
-  var item = e.target.closest('.tag-item');
-  if (item) searchByTag(item.dataset.tag);
+document.getElementById('sqResults').addEventListener('click', function(e) {
+  var card = e.target.closest('.mem-card');
+  if (!card) return;
+  document.querySelectorAll('.mem-card').forEach(function(c) { c.classList.remove('active'); });
+  card.classList.add('active');
+  showDetail(card.dataset.id);
 });
 
 document.getElementById('detailLinks').addEventListener('click', function(e) {
@@ -605,6 +1003,223 @@ function showErrorState(err) {
   document.getElementById('memoriesList').innerHTML =
     '<div class="empty-state">Failed to load data. Check that the server is running.</div>';
 }
+
+// Growth chart
+async function loadGrowthChart() {
+  try {
+    var data = await fetchJSON('/api/heatmap');
+    var days = data.days || [];
+    if (days.length === 0) return;
+
+    // Build cumulative data
+    var cumData = [];
+    var total = 0;
+    for (var i = 0; i < days.length; i++) {
+      total += days[i].count;
+      cumData.push({ date: days[i].date, count: days[i].count, cumulative: total });
+    }
+
+    var labels = cumData.map(function(d) { return d.date; });
+    var daily = cumData.map(function(d) { return d.count; });
+    var cumulative = cumData.map(function(d) { return d.cumulative; });
+
+    if (growthChart) growthChart.destroy();
+    growthChart = new Chart(document.getElementById('growthChart'), {
+      type: 'line',
+      data: {
+        labels: labels,
+        datasets: [
+          {
+            label: 'Total Memories',
+            data: cumulative,
+            borderColor: '#6c8aff',
+            backgroundColor: 'rgba(108,138,255,0.1)',
+            fill: true,
+            tension: 0.3,
+            pointRadius: 0,
+            pointHoverRadius: 4,
+            yAxisID: 'y1'
+          },
+          {
+            label: 'New / Day',
+            data: daily,
+            borderColor: '#4ade80',
+            backgroundColor: 'rgba(74,222,128,0.15)',
+            fill: true,
+            tension: 0.3,
+            pointRadius: 0,
+            pointHoverRadius: 4,
+            yAxisID: 'y'
+          }
+        ]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        interaction: { mode: 'index', intersect: false },
+        plugins: {
+          legend: { labels: { color: '#8b8fa8', font: { size: 11 } } },
+          tooltip: { backgroundColor: '#242836', titleColor: '#e4e6f0', bodyColor: '#e4e6f0', borderColor: '#2e3348', borderWidth: 1 }
+        },
+        scales: {
+          x: { grid: { color: '#2e3348' }, ticks: { color: '#8b8fa8', maxTicksLimit: 12, font: { size: 10 } } },
+          y: { position: 'left', grid: { color: '#2e3348' }, ticks: { color: '#4ade80', font: { size: 10 } }, title: { display: true, text: 'New/Day', color: '#4ade80', font: { size: 10 } }, beginAtZero: true },
+          y1: { position: 'right', grid: { drawOnChartArea: false }, ticks: { color: '#6c8aff', font: { size: 10 } }, title: { display: true, text: 'Total', color: '#6c8aff', font: { size: 10 } }, beginAtZero: true }
+        }
+      }
+    });
+  } catch(e) { console.warn('growth chart:', e); }
+}
+
+// Chat logic — Agent Search with SSE
+async function sendChat() {
+  if (chatLoading) return;
+  var input = document.getElementById('chatInput');
+  var question = input.value.trim();
+  if (!question) return;
+
+  input.value = '';
+  chatLoading = true;
+  document.getElementById('chatSend').disabled = true;
+
+  // Save user message to history
+  chatHistory.push({ role: 'user', content: question });
+  updateContextDisplay();
+  appendChatMsg('user', question);
+
+  var agentId = 'agent-' + Date.now();
+  var msgs = document.getElementById('chatMessages');
+  msgs.insertAdjacentHTML('beforeend',
+    '<div class="chat-msg assistant" id="' + agentId + '">' +
+    '<div class="chat-bubble">' +
+      '<div class="agent-steps" id="' + agentId + '-steps"></div>' +
+      '<div class="agent-answer" id="' + agentId + '-answer"></div>' +
+    '</div>' +
+    '<div class="chat-sources-container" id="' + agentId + '-sources"></div>' +
+    '</div>');
+  msgs.scrollTop = msgs.scrollHeight;
+
+  var budget = parseInt(document.getElementById('contextBudget').value) || 20000;
+  var history = getHistoryForAPI();
+
+  try {
+    var resp = await fetch('/api/ask/agent', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        question: question,
+        max_steps: 5,
+        history: history.slice(0, -1), // exclude current question (already in question field)
+        max_context_tokens: budget
+      })
+    });
+
+    var reader = resp.body.getReader();
+    var decoder = new TextDecoder();
+    var buffer = '';
+    var finalData = null;
+
+    while (true) {
+      var result = await reader.read();
+      if (result.done) break;
+      buffer += decoder.decode(result.value, { stream: true });
+
+      var lines = buffer.split('\n');
+      buffer = lines.pop();
+
+      var currentEvent = '';
+      for (var li = 0; li < lines.length; li++) {
+        var line = lines[li];
+        if (line.startsWith('event: ')) {
+          currentEvent = line.slice(7).trim();
+        } else if (line.startsWith('data: ')) {
+          try {
+            var data = JSON.parse(line.slice(6));
+            if (currentEvent === 'step') {
+              renderAgentStep(agentId, data);
+            } else if (currentEvent === 'done') {
+              finalData = data;
+            }
+          } catch(e) {}
+        }
+      }
+    }
+
+    if (finalData) {
+      renderAgentFinal(agentId, finalData);
+      // Save assistant answer to history
+      chatHistory.push({ role: 'assistant', content: finalData.answer || '' });
+      updateContextDisplay();
+    }
+  } catch(e) {
+    document.getElementById(agentId + '-answer').textContent = 'Error: ' + e.message;
+  }
+
+  chatLoading = false;
+  document.getElementById('chatSend').disabled = false;
+  msgs.scrollTop = msgs.scrollHeight;
+}
+
+function renderAgentStep(agentId, step) {
+  var stepsEl = document.getElementById(agentId + '-steps');
+  if (!stepsEl) return;
+  var html = '';
+  switch(step.type) {
+    case 'thinking':
+      html = '<div class="agent-step"><span class="step-badge think">Think</span><span class="step-text">' + esc(step.content) + '</span></div>';
+      break;
+    case 'searching':
+      var rCount = (step.results !== undefined && step.results !== null) ? step.results : 0;
+      html = '<div class="agent-step"><span class="step-badge search">Search</span><span class="step-text">"' + esc(step.query) + '"</span><span class="step-count">' + rCount + ' results</span></div>';
+      break;
+    case 'observing':
+      html = '<div class="agent-step"><span class="step-badge observe">Observe</span><span class="step-text">' + esc(step.content) + '</span></div>';
+      break;
+    case 'answering':
+      html = '<div class="agent-step"><span class="step-badge answer">Answer</span><span class="step-text">' + esc(step.content) + '</span></div>';
+      break;
+  }
+  stepsEl.insertAdjacentHTML('beforeend', html);
+  stepsEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+function renderAgentFinal(agentId, data) {
+  document.getElementById(agentId + '-answer').textContent = data.answer || 'No response';
+
+  if (data.sources && data.sources.length > 0) {
+    var srcHtml = '<details class="chat-sources"><summary>' + data.sources.length + ' memory sources</summary>';
+    data.sources.forEach(function(s) {
+      srcHtml += '<div class="chat-source-item"><strong>[' + esc(s.category) + ']</strong> ' + esc(s.content) + '</div>';
+    });
+    srcHtml += '</details>';
+    document.getElementById(agentId + '-sources').innerHTML = srcHtml;
+  }
+}
+
+function appendChatMsg(role, text) {
+  var msgs = document.getElementById('chatMessages');
+  msgs.insertAdjacentHTML('beforeend',
+    '<div class="chat-msg ' + role + '"><div class="chat-bubble">' + esc(text) + '</div></div>');
+  msgs.scrollTop = msgs.scrollHeight;
+}
+
+document.getElementById('chatSend').addEventListener('click', sendChat);
+document.getElementById('chatInput').addEventListener('keydown', function(e) {
+  if (e.key === 'Enter') sendChat();
+});
+
+// Context controls
+document.getElementById('contextBudget').addEventListener('input', function() {
+  var v = parseInt(this.value);
+  document.getElementById('contextBudgetLabel').textContent = (v >= 1000 ? (v / 1000) + 'k' : v);
+  updateContextDisplay();
+});
+document.getElementById('contextClear').addEventListener('click', function() {
+  chatHistory = [];
+  var msgs = document.getElementById('chatMessages');
+  msgs.innerHTML = '<div class="chat-msg assistant"><div class="chat-bubble">Ask me anything about your memories. I\'ll answer based on what you\'ve stored.</div></div>';
+  updateContextDisplay();
+});
 
 // Init
 loadStats().catch(showErrorState);

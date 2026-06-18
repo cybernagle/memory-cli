@@ -44,7 +44,7 @@ var importCmd = &cobra.Command{
 				}
 				return fmt.Errorf("malformed JSON at record %d: %w", count+1, err)
 			}
-			if _, err := s.Write(mem.Content, store.PhaseOrganized, store.CategoryInbox, mem.Scope, mem.Tags, mem.Source); err != nil {
+			if _, err := s.Write(mem.Content, store.PhaseInbox, store.CategoryInbox, mem.Scope, mem.Tags, mem.Source); err != nil {
 				fmt.Fprintf(os.Stderr, "Error importing memory: %v\n", err)
 				continue
 			}

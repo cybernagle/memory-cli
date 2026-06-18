@@ -9,6 +9,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/cybernagle/memory-cli/internal/dashboard"
+	"github.com/cybernagle/memory-cli/internal/llm"
 )
 
 var dashboardPort int
@@ -23,7 +24,13 @@ var dashboardCmd = &cobra.Command{
 		}
 
 		addr := fmt.Sprintf(":%d", dashboardPort)
-		srv := dashboard.NewServer(s)
+
+		var llmClient *llm.Client
+		if c, err := llm.NewClient(llm.Config{}); err == nil {
+			llmClient = c
+		}
+
+		srv := dashboard.NewServer(s, llmClient)
 
 		url := fmt.Sprintf("http://localhost:%d", dashboardPort)
 		fmt.Printf("Memory dashboard running at %s\n", url)

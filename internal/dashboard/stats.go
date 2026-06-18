@@ -13,6 +13,7 @@ type StatsResponse struct {
 	Categories   map[string]int `json:"categories"`
 	Sources      map[string]int `json:"sources"`
 	Tags         map[string]int `json:"tags"`
+	Projects     map[string]int `json:"projects"`
 	Recent24h    int            `json:"recent_24h"`
 	ExpiringSoon int            `json:"expiring_soon"`
 }
@@ -36,6 +37,7 @@ func ComputeStats(s statser) (*StatsResponse, error) {
 		Categories: make(map[string]int),
 		Sources:    make(map[string]int),
 		Tags:       make(map[string]int),
+		Projects:   make(map[string]int),
 	}
 
 	for _, cat := range store.AllCategories {
@@ -56,6 +58,10 @@ func ComputeStats(s statser) (*StatsResponse, error) {
 
 		if mem.Source != "" {
 			resp.Sources[mem.Source]++
+		}
+
+		if mem.Project != "" {
+			resp.Projects[mem.Project]++
 		}
 
 		for _, tag := range mem.Tags {

@@ -1,11 +1,13 @@
 package dashboard
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -59,6 +61,9 @@ func (srv *Server) handleMemories(w http.ResponseWriter, r *http.Request) {
 	}
 	if v := q.Get("source"); v != "" {
 		opts.Source = v
+	}
+	if v := q.Get("project"); v != "" {
+		opts.Project = v
 	}
 	var limit int
 	if v := q.Get("limit"); v != "" {
@@ -236,4 +241,222 @@ func (srv *Server) handleGraph(w http.ResponseWriter, r *http.Request) {
 		"edges": edges,
 		"stats": fmt.Sprintf("%d nodes, %d edges", len(nodes), len(edges)),
 	})
+}
+
+type heatmapDay struct {
+	Date  string `json:"date"`
+	Count int    `json:"count"`
+	Level int    `json:"level"`
+}
+
+func (srv *Server) handleHeatmap(w http.ResponseWriter, r *http.Request) {
+	// Build heatmap from memory list (works without SQLite)
+	all, err := srv.store.impl.List(store.ListOptions{})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	type dayCount struct {
+		Date  string `json:"date"`
+		Count int    `json:"count"`
+		Level int    `json:"level"`
+	}
+
+	countMap := make(map[string]int)
+	for _, m := range all {
+		key := m.CreatedAt.Format("2006-01-02")
+		countMap[key]++
+	}
+
+	var days []dayCount
+	maxCount := 1
+	total := 0
+	for key, count := range countMap {
+		if count > maxCount {
+			maxCount = count
+		}
+		total += count
+		days = append(days, dayCount{Date: key, Count: count})
+	}
+
+	// Sort by date
+	sort.Slice(days, func(i, j int) bool {
+		return days[i].Date < days[j].Date
+	})
+
+	maxStreak := 0
+	currentStreak := 0
+	for _, d := range days {
+		if d.Count > 0 {
+			currentStreak++
+			if currentStreak > maxStreak {
+				maxStreak = currentStreak
+			}
+		} else {
+			currentStreak = 0
+		}
+	}
+
+	for i := range days {
+		days[i].Level = heatmapLevel(days[i].Count, maxCount)
+	}
+
+	avgDay := 0
+	if len(days) > 0 {
+		avgDay = total / len(days)
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"days": days,
+		"summary": map[string]any{
+			"total":   total,
+			"days":    len(days),
+			"streak":  maxStreak,
+			"max_day": maxCount,
+			"avg_day": avgDay,
+		},
+	})
+}
+
+func heatmapLevel(count, max int) int {
+	if count == 0 {
+		return 0
+	}
+	ratio := float64(count) / float64(max)
+	switch {
+	case ratio > 0.75:
+		return 4
+	case ratio > 0.5:
+		return 3
+	case ratio > 0.25:
+		return 2
+	default:
+		return 1
+	}
+}
+
+func (srv *Server) handleAsk(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Question string `json:"question"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Question == "" {
+		writeError(w, http.StatusBadRequest, "missing question")
+		return
+	}
+
+	// Search for relevant memories
+	results, err := srv.store.impl.Search(store.SearchOptions{
+		Query: req.Question,
+		Phase: store.PhaseOrganized,
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "search failed: "+err.Error())
+		return
+	}
+
+	// Also try searching in processed
+	processed, _ := srv.store.impl.Search(store.SearchOptions{
+		Query: req.Question,
+		Phase: store.PhaseProcessed,
+	})
+	results = append(results, processed...)
+
+	// Limit context to top results by relevance (max 20)
+	if len(results) > 20 {
+		results = results[:20]
+	}
+
+	if len(results) == 0 {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"answer":   "No relevant memories found for your question.",
+			"sources":  []any{},
+			"question": req.Question,
+		})
+		return
+	}
+
+	// Build context from memories
+	var sb strings.Builder
+	for i, m := range results {
+		content := m.Content
+		if len(content) > 500 {
+			content = content[:500] + "..."
+		}
+		sb.WriteString(fmt.Sprintf("\n[%d] [%s] %s", i+1, m.Category, content))
+		sb.WriteString("\n")
+	}
+
+	prompt := fmt.Sprintf(`You are a memory assistant. Answer the user's question based ONLY on the following memories. If the memories don't contain relevant information, say so. Cite memory IDs when referencing specific facts.
+
+User's memories:
+%s
+
+Question: %s
+
+Answer concisely in the same language as the question:`, sb.String(), req.Question)
+
+	if srv.llm == nil {
+		// Fallback: return raw search results
+		writeJSON(w, http.StatusOK, map[string]any{
+			"answer":   "LLM not available. Here are the relevant memories:\n\n" + formatMemoryList(results[:min(10, len(results))]),
+			"sources":  toSources(results[:min(10, len(results))]),
+			"question": req.Question,
+		})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
+	defer cancel()
+
+	resp, err := srv.llm.Chat(ctx, prompt)
+	if err != nil {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"answer":   "LLM error: " + err.Error(),
+			"sources":  toSources(results[:min(5, len(results))]),
+			"question": req.Question,
+		})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"answer":   resp,
+		"sources":  toSources(results[:min(10, len(results))]),
+		"question": req.Question,
+	})
+}
+
+func formatMemoryList(mems []*store.Memory) string {
+	var lines []string
+	for _, m := range mems {
+		content := m.Content
+		if len(content) > 150 {
+			content = content[:150] + "..."
+		}
+		lines = append(lines, fmt.Sprintf("- [%s] %s", m.Category, content))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func toSources(mems []*store.Memory) []map[string]string {
+	sources := make([]map[string]string, len(mems))
+	for i, m := range mems {
+		content := m.Content
+		if len(content) > 150 {
+			content = content[:150] + "..."
+		}
+		sources[i] = map[string]string{
+			"id":       m.ID,
+			"category": string(m.Category),
+			"content":  content,
+		}
+	}
+	return sources
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }

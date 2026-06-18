@@ -18,3 +18,17 @@ Thumbs.db
 
 # Memory data (never commit actual memories)
 .memory/
+
+# Local tooling & scratch
+.claude/
+.omc/
+.playwright-mcp/
+docs/
+PIPELINE_REVIEW.md
+
+# Stray artifacts
+memory-cli
+memory.db
+
+# Code snapshot (not part of the project)
+storage-collection-code/

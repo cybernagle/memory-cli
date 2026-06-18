@@ -35,13 +35,24 @@ a{color:var(--primary);cursor:pointer}
 /* Heatmap */
 .heatmap-section{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:14px;margin-bottom:16px}
 .heatmap-section h3{font-size:12px;margin-bottom:8px;color:var(--text2)}
-.heatmap{display:flex;flex-wrap:wrap;gap:2px}
-.cell{width:11px;height:11px;border-radius:2px;background:var(--c1);position:relative;cursor:pointer}
+.heatmap-wrap{display:flex;gap:6px;overflow-x:auto;padding-bottom:4px}
+.heatmap-days{display:flex;flex-direction:column;gap:2px;padding-top:18px;font-size:9px;color:var(--text2);flex-shrink:0}
+.heatmap-days span{height:11px;line-height:11px}
+.heatmap-grid{display:flex;flex-direction:column;gap:0}
+.heatmap-months{display:flex;gap:2px;margin-bottom:3px;height:14px}
+.heatmap-months span{font-size:9px;color:var(--text2)}
+.heatmap-cells{display:flex;gap:2px}
+.heatmap-col{display:flex;flex-direction:column;gap:2px}
+.cell{width:11px;height:11px;border-radius:2px;background:var(--c1);position:relative;cursor:pointer;flex-shrink:0}
 .cell.l1{background:var(--c2)}
 .cell.l2{background:var(--c3)}
 .cell.l3{background:var(--c4)}
 .cell.l4{background:var(--c5)}
 .cell:hover::after{content:attr(data-tip);position:absolute;bottom:calc(100% + 4px);left:50%;transform:translateX(-50%);background:var(--surface2);color:var(--text);padding:3px 8px;border-radius:4px;font-size:10px;white-space:nowrap;z-index:20;pointer-events:none;border:1px solid var(--border)}
+.heatmap-footer{display:flex;align-items:center;gap:8px;margin-top:8px;font-size:11px;color:var(--text2)}
+.heatmap-footer .cell{cursor:default}
+.heat-summary{margin-left:auto;display:flex;gap:12px}
+.heat-summary span strong{color:var(--text)}
 
 /* Histogram */
 .histo-section{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:16px;margin-bottom:16px}
@@ -174,7 +185,25 @@ a{color:var(--primary);cursor:pointer}
     </div>
     <div class="heatmap-section">
       <h3>Activity (365 days)</h3>
-      <div class="heatmap" id="heatmap"></div>
+      <div class="heatmap-wrap">
+        <div class="heatmap-days">
+          <span></span><span>Mon</span><span></span><span>Wed</span><span></span><span>Fri</span><span></span>
+        </div>
+        <div class="heatmap-grid">
+          <div class="heatmap-months" id="heatmap-months"></div>
+          <div class="heatmap-cells" id="heatmap"></div>
+        </div>
+      </div>
+      <div class="heatmap-footer">
+        <span>Less</span>
+        <div class="cell"></div>
+        <div class="cell l1"></div>
+        <div class="cell l2"></div>
+        <div class="cell l3"></div>
+        <div class="cell l4"></div>
+        <span>More</span>
+        <div class="heat-summary" id="heat-summary"></div>
+      </div>
     </div>
   </div>
 
@@ -477,10 +506,38 @@ async function loadOverview(){
     const r=await fetch('/activity/heatmap');
     const d=await r.json();
     const days=d.days||[];
-    let html='';
-    for(let i=0;i<365-days.length;i++) html+='<div class="cell"></div>';
-    for(const day of days) html+=`<div class="cell l${day.level}" data-tip="${day.date}: ${day.count} activities"></div>`;
-    document.getElementById('heatmap').innerHTML=html;
+    const summary=d.summary||{};
+    const countMap={};
+    for(const day of days) countMap[day.date]=(countMap[day.date]||0)+day.count;
+    let maxC=1;
+    for(const c of Object.values(countMap)) if(c>maxC) maxC=c;
+    function lv(c){if(!c)return 0;const r=c/maxC;if(r>.75)return 4;if(r>.5)return 3;if(r>.25)return 2;return 1;}
+    const today=new Date();today.setHours(0,0,0,0);
+    const dow=today.getDay();const monOff=dow===0?6:dow-1;
+    const lastMon=new Date(today);lastMon.setDate(today.getDate()-monOff);
+    const start=new Date(lastMon);start.setDate(start.getDate()-51*7);
+    const MN=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    let cellsHtml='',monthHtml='',lastM=-1;
+    for(let w=0;w<52;w++){
+      const ws=new Date(start);ws.setDate(start.getDate()+w*7);
+      const m=ws.getMonth();
+      monthHtml+=m!==lastM?`<span>${MN[m]}</span>`:`<span></span>`;
+      lastM=m;
+      cellsHtml+='<div class="heatmap-col">';
+      for(let dd=0;dd<7;dd++){
+        const cd=new Date(ws);cd.setDate(ws.getDate()+dd);
+        const key=cd.toISOString().slice(0,10);
+        const c=countMap[key]||0;
+        cellsHtml+=`<div class="cell${c?' l'+lv(c):''}" data-tip="${key}: ${c} memories"></div>`;
+      }
+      cellsHtml+='</div>';
+    }
+    document.getElementById('heatmap').innerHTML=cellsHtml;
+    document.getElementById('heatmap-months').innerHTML=monthHtml;
+    document.getElementById('heat-summary').innerHTML=
+      `<span>Total: <strong>${summary.total||0}</strong></span>`+
+      `<span>Streak: <strong>${summary.streak||0}</strong></span>`+
+      `<span>Avg/day: <strong>${summary.avg_day||0}</strong></span>`;
   }catch(e){document.getElementById('heatmap').innerHTML='<p style="color:var(--text2);font-size:12px">No activity data</p>';}
 }
 

@@ -47,7 +47,7 @@ func captureOutput(t *testing.T, fn func()) string {
 	return buf.String()
 }
 
-// extractIDFromOutput extracts a UUID from output like "Created knowledge/organized memory: abc123-..."
+// extractIDFromOutput extracts a UUID from output like "Created inbox memory memory: abc123-..."
 func extractIDFromOutput(output string) string {
 	parts := strings.Split(output, "memory: ")
 	if len(parts) < 2 {
@@ -80,7 +80,7 @@ func TestWriteAndRead(t *testing.T) {
 		rootCmd.SetArgs([]string{"write", "hello world", "--category", "knowledge"})
 		rootCmd.Execute()
 	})
-	if !strings.Contains(output, "knowledge/organized") {
+	if !strings.Contains(output, "inbox memory") {
 		t.Fatalf("unexpected write output: %s", output)
 	}
 

@@ -75,6 +75,12 @@ go fmt ./...
 | `internal/config` | Config loading from `~/.memory/config.yaml` |
 | `internal/cmd` | Cobra command definitions |
 
+## Architecture Spec
+
+- **`docs/architecture.html`** is the living architecture specification (HTML + inline SVG).
+- When making changes that affect components, data flow, or package relationships, update this file accordingly.
+- Keep the spec synchronized with code — treat it like a test that must pass.
+
 ## Pre-Commit Checklist
 
 - [ ] `go vet ./...` passes

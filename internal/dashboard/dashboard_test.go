@@ -19,7 +19,7 @@ func setupServer(t *testing.T) (*Server, store.Store) {
 	if err := s.Init(); err != nil {
 		t.Fatalf("init: %v", err)
 	}
-	return NewServer(s), s
+	return NewServer(s, nil), s
 }
 
 func mustWrite(t *testing.T, s store.Store, content string, phase store.Phase, cat store.Category, tags []string) string {
