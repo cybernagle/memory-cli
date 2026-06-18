@@ -145,6 +145,7 @@ type ListOptions struct {
 	Project       string
 	PromptID      string
 	Limit         int
+	Offset        int
 	CreatedAfter  *time.Time
 	CreatedBefore *time.Time
 	Tags          []string

@@ -248,6 +248,10 @@ func (s *SqliteStore) List(opts ListOptions) ([]*Memory, error) {
 	if opts.Limit > 0 {
 		query += " LIMIT ?"
 		args = append(args, opts.Limit)
+		if opts.Offset > 0 {
+			query += " OFFSET ?"
+			args = append(args, opts.Offset)
+		}
 	}
 
 	rows, err := s.db.Query(query, args...)

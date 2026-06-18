@@ -71,6 +71,11 @@ func (srv *Server) handleMemories(w http.ResponseWriter, r *http.Request) {
 			limit = n
 		}
 	}
+	if v := q.Get("offset"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			opts.Offset = n
+		}
+	}
 
 	applyRecent := q.Get("recent") == "true"
 	if !applyRecent {
@@ -286,10 +291,18 @@ type graphEdge struct {
 }
 
 func (srv *Server) handleGraph(w http.ResponseWriter, r *http.Request) {
-	all, err := srv.store.impl.List(store.ListOptions{})
+	// Only load organized + processed memories for the graph — at 18k records, including
+	// raw inbox conversation turns makes the force-directed layout unusable (O(n²) per frame)
+	// and inbox fragments have no meaningful links among each other. Organized memories are
+	// the consolidated knowledge nodes that actually form a useful relationship graph.
+	all, err := srv.store.impl.List(store.ListOptions{Phase: store.PhaseOrganized})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
+	}
+	// Also include processed (extracted but not yet consolidated into organized).
+	if processed, err := srv.store.impl.List(store.ListOptions{Phase: store.PhaseProcessed}); err == nil {
+		all = append(all, processed...)
 	}
 
 	nodes := make([]graphNode, 0, len(all))
@@ -346,22 +359,110 @@ type heatmapDay struct {
 }
 
 func (srv *Server) handleHeatmap(w http.ResponseWriter, r *http.Request) {
-	// Build heatmap from memory list (works without SQLite)
-	all, err := srv.store.impl.List(store.ListOptions{})
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-
 	type dayCount struct {
 		Date  string `json:"date"`
 		Count int    `json:"count"`
 		Level int    `json:"level"`
 	}
 
+	// SQL fast path: aggregate with GROUP BY instead of loading 18k rows into Go.
+	// created_at is stored as RFC3339 TEXT; substr(created_at,1,10) extracts YYYY-MM-DD,
+	// substr(created_at,12,2) extracts the hour, strftime('%w', created_at) the weekday.
+	sqlStore, _ := srv.store.impl.(*store.SqliteStore)
+	if sqlStore != nil {
+		db := sqlStore.DB()
+
+		// Per-day counts.
+		dayRows, err := db.Query(`SELECT substr(created_at,1,10) AS d, COUNT(*) FROM memories GROUP BY d ORDER BY d`)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		var days []dayCount
+		maxCount := 1
+		total := 0
+		for dayRows.Next() {
+			var dc dayCount
+			dayRows.Scan(&dc.Date, &dc.Count)
+			if dc.Count > maxCount {
+				maxCount = dc.Count
+			}
+			total += dc.Count
+			days = append(days, dc)
+		}
+		dayRows.Close()
+
+		// Streak (consecutive days with count > 0).
+		maxStreak := 0
+		currentStreak := 0
+		for _, d := range days {
+			if d.Count > 0 {
+				currentStreak++
+				if currentStreak > maxStreak {
+					maxStreak = currentStreak
+				}
+			} else {
+				currentStreak = 0
+			}
+		}
+		for i := range days {
+			days[i].Level = heatmapLevel(days[i].Count, maxCount)
+		}
+		avgDay := 0
+		if len(days) > 0 {
+			avgDay = total / len(days)
+		}
+
+		// Hour-of-day and weekday distributions.
+		hourCounts := make([]int, 24)
+		hourRows, _ := db.Query(`SELECT CAST(substr(created_at,12,2) AS INTEGER), COUNT(*) FROM memories GROUP BY substr(created_at,12,2)`)
+		if hourRows != nil {
+			for hourRows.Next() {
+				var h, c int
+				hourRows.Scan(&h, &c)
+				if h >= 0 && h < 24 {
+					hourCounts[h] = c
+				}
+			}
+			hourRows.Close()
+		}
+
+		weekdayCounts := make([]int, 7)
+		wdRows, _ := db.Query(`SELECT CAST(strftime('%w', created_at) AS INTEGER), COUNT(*) FROM memories GROUP BY strftime('%w', created_at)`)
+		if wdRows != nil {
+			for wdRows.Next() {
+				var wd, c int
+				wdRows.Scan(&wd, &c)
+				if wd >= 0 && wd < 7 {
+					weekdayCounts[wd] = c
+				}
+			}
+			wdRows.Close()
+		}
+
+		writeJSON(w, http.StatusOK, map[string]any{
+			"days": days,
+			"summary": map[string]any{
+				"total":   total,
+				"days":    len(days),
+				"streak":  maxStreak,
+				"max_day": maxCount,
+				"avg_day": avgDay,
+			},
+			"hours":    hourCounts,
+			"weekdays": weekdayCounts,
+		})
+		return
+	}
+
+	// Fallback: iterate all (for non-SQLite stores).
+	all, err := srv.store.impl.List(store.ListOptions{})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
 	countMap := make(map[string]int)
-	// Hour-of-day (0-23) and weekday (0=Sunday..6=Saturday) distributions — reveal when the
-	// user is most active (late-night hacking? weekday vs weekend?).
 	hourCounts := make([]int, 24)
 	weekdayCounts := make([]int, 7)
 	for _, m := range all {
@@ -382,7 +483,6 @@ func (srv *Server) handleHeatmap(w http.ResponseWriter, r *http.Request) {
 		days = append(days, dayCount{Date: key, Count: count})
 	}
 
-	// Sort by date
 	sort.Slice(days, func(i, j int) bool {
 		return days[i].Date < days[j].Date
 	})

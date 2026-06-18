@@ -345,11 +345,15 @@ a:hover { text-decoration: underline; }
   <div class="overview-view" id="overviewView">
   <div class="grid">
     <div class="card">
-      <h2>Phase Overview</h2>
+      <h2>Processing Pipeline</h2>
       <div class="stats-row">
         <div class="stat-box stat-inbox">
           <div class="num" id="inboxCount">-</div>
-          <div class="label">Inbox</div>
+          <div class="label">Raw Inbox</div>
+        </div>
+        <div class="stat-box stat-recent">
+          <div class="num" id="extractedCount">-</div>
+          <div class="label">Extracted</div>
         </div>
         <div class="stat-box stat-organized">
           <div class="num" id="organizedCount">-</div>
@@ -359,11 +363,8 @@ a:hover { text-decoration: underline; }
           <div class="num" id="totalCount">-</div>
           <div class="label">Total</div>
         </div>
-        <div class="stat-box stat-recent">
-          <div class="num" id="recentCount">-</div>
-          <div class="label">Last 24h</div>
-        </div>
       </div>
+      <div style="margin-top:10px;font-size:11px;color:var(--text2);display:flex;gap:14px;flex-wrap:wrap" id="processorDetail"></div>
       <div style="margin-top:16px">
         <h2>Top Tags</h2>
         <div class="tag-cloud" id="tagCloud"></div>
@@ -422,6 +423,7 @@ a:hover { text-decoration: underline; }
       <button class="filter-btn active" data-filter="all">All</button>
       <button class="filter-btn" data-filter="inbox">Inbox</button>
       <button class="filter-btn" data-filter="organized">Organized</button>
+      <button class="filter-btn" onclick="loadGraph().catch(function(e){console.warn(e)})" style="margin-left:auto">Show Graph</button>
     </div>
     <div class="memories-list" id="memoriesList">
       <div class="empty-state">Loading memories...</div>
@@ -584,7 +586,27 @@ async function loadStats() {
   document.getElementById('inboxCount').textContent = stats.inbox;
   document.getElementById('organizedCount').textContent = stats.organized;
   document.getElementById('totalCount').textContent = stats.total;
-  document.getElementById('recentCount').textContent = stats.recent_24h;
+
+  // Extracted = memories touched by either extraction processor (fact-processor or
+  // process-cmd). Shows how much raw conversation has been turned into structured output.
+  var procs = stats.processors || {};
+  var extracted = (procs['fact-processor'] || 0) + (procs['process-cmd'] || 0);
+  document.getElementById('extractedCount').textContent = extracted;
+
+  // Processor detail line: unconsumed / fact-processor / process-cmd / consolidate-llm / enrich-tags
+  var procDetail = document.getElementById('processorDetail');
+  if (procDetail) {
+    var items = [
+      ['unconsumed', procs['unconsumed'] || 0],
+      ['fact-processor', procs['fact-processor'] || 0],
+      ['process-cmd', procs['process-cmd'] || 0],
+      ['consolidate-llm', procs['consolidate-llm'] || 0],
+      ['enrich-tags', procs['enrich-tags'] || 0],
+    ];
+    procDetail.innerHTML = items.map(function(p) {
+      return '<span>· ' + p[0] + ': <b>' + p[1] + '</b></span>';
+    }).join('');
+  }
 
   const tags = Object.entries(stats.tags || {}).sort((a,b) => b[1]-a[1]).slice(0,15);
   document.getElementById('tagCloud').innerHTML = tags.map(function(t) {
@@ -673,10 +695,23 @@ function renderChart(categories) {
   });
 }
 
-async function loadMemories() {
-  const data = await fetchJSON('/api/memories?limit=200');
-  allMemories = data.memories || [];
-  // Sort: organized first, then processed, then inbox; within each phase by time desc
+// Recent Activity uses server-side pagination. The graph is NOT auto-loaded (it was the
+// main perf killer at 18k records); it loads lazily when the user clicks the graph tab.
+var memOffset = 0;
+var memPageSize = 50;
+var hasMoreMemories = true;
+
+async function loadMemories(append) {
+  if (!append) { memOffset = 0; allMemories = []; hasMoreMemories = true; }
+  if (!hasMoreMemories) return;
+  var url = '/api/memories?limit=' + memPageSize + '&offset=' + memOffset;
+  if (currentFilter !== 'all') url += '&phase=' + currentFilter;
+  const data = await fetchJSON(url);
+  var batch = data.memories || [];
+  allMemories = append ? allMemories.concat(batch) : batch;
+  hasMoreMemories = batch.length >= memPageSize; // if short page, no more data
+  memOffset += batch.length;
+
   const phaseOrder = {organized: 0, processed: 1, inbox: 2};
   allMemories.sort(function(a,b) {
     var pa = phaseOrder[a.phase] !== undefined ? phaseOrder[a.phase] : 9;
@@ -685,7 +720,6 @@ async function loadMemories() {
     return new Date(b.created_at) - new Date(a.created_at);
   });
   renderMemories();
-  if (allMemories.length > 0) loadGraph().catch(function(err) { console.warn('graph:', err); });
 }
 
 function renderMemories(filter) {
@@ -714,22 +748,24 @@ function renderMemories(filter) {
       '<div class="mem-content truncated">' + esc(firstLine) + '</div>' +
     '</div>';
   }).join('');
+
+  // "Load more" button — server-side pagination keeps the DOM small at 18k records.
+  if (hasMoreMemories) {
+    var moreBtn = document.createElement('button');
+    moreBtn.className = 'filter-btn';
+    moreBtn.style.cssText = 'display:block;margin:12px auto;padding:8px 24px;width:auto';
+    moreBtn.textContent = 'Load more (' + allMemories.length + ' loaded)';
+    moreBtn.onclick = function() { loadMemories(true); };
+    list.appendChild(moreBtn);
+  }
 }
 
 function setFilter(btn) {
   document.querySelectorAll('.filter-btn').forEach(function(b) { b.classList.remove('active'); });
   btn.classList.add('active');
   currentFilter = btn.dataset.filter;
-  // Fetch phase-specific data when filtering
-  if (currentFilter === 'all') {
-    loadMemories();
-  } else {
-    fetchJSON('/api/memories?phase=' + currentFilter + '&limit=200').then(function(data) {
-      allMemories = data.memories || [];
-      allMemories.sort(function(a,b) { return new Date(b.created_at) - new Date(a.created_at); });
-      renderMemories();
-    });
-  }
+  // Reload from page 0 with the new filter (loadMemories reads currentFilter).
+  loadMemories(false);
 }
 
 async function showDetail(id) {
