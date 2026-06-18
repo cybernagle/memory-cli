@@ -35,6 +35,7 @@ func (a *FingersaverAdapter) Ingest() ([]*store.Memory, error) {
 				Scope:    "global",
 				Tags:     []string{"fingersaver", "chat"},
 				Source:   "fingersaver",
+				Project:  "fingersaver",
 			})
 		}
 	}

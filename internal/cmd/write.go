@@ -6,6 +6,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/cybernagle/memory-cli/internal/ingest"
 	"github.com/cybernagle/memory-cli/internal/store"
 )
 
@@ -19,7 +20,7 @@ var (
 
 var writeCmd = &cobra.Command{
 	Use:   "write [content]",
-	Short: "Write a new memory (defaults to inbox)",
+	Short: "Write a new memory (always to inbox, pipeline will organize)",
 	Args:  cobra.MinimumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		s, err := getStore()
@@ -32,23 +33,19 @@ var writeCmd = &cobra.Command{
 			tags = strings.Split(writeTags, ",")
 		}
 
-		cat := store.Category(writeCategory)
 		if writeCategory != "" {
+			cat := store.Category(writeCategory)
 			if err := validateCategory(cat); err != nil {
 				return err
 			}
-			mem, err := s.Write(content, store.PhaseOrganized, cat, writeScope, tags, writeSource)
-			if err != nil {
-				return err
-			}
-			fmt.Printf("Created %s/%s memory: %s\n", cat, mem.Phase, mem.ID)
-		} else {
-			mem, err := s.WriteToInbox(content, writeScope, tags, writeSource)
-			if err != nil {
-				return err
-			}
-			fmt.Printf("Created inbox memory: %s\n", mem.ID)
+			tags = append(tags, "cat:"+writeCategory)
 		}
+
+		mem, err := s.WriteToInbox(content, writeScope, tags, writeSource, ingest.CurrentProject())
+		if err != nil {
+			return err
+		}
+		fmt.Printf("Created inbox memory: %s\n", mem.ID)
 		return nil
 	},
 }

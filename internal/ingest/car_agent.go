@@ -47,6 +47,7 @@ func (a *CarAgentAdapter) Ingest() ([]*store.Memory, error) {
 					Scope:    "global",
 					Tags:     tags,
 					Source:   "car-agent",
+					Project:  "car-agent",
 				})
 			}
 		}

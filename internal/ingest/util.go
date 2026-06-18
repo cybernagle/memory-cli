@@ -44,3 +44,44 @@ func truncate(s string, maxLen int) string {
 	}
 	return string(runes[:maxLen]) + "..."
 }
+
+// ProjectFromCwd derives a short, lowercased project name from a working-directory path.
+// e.g. "/Users/naglezhang/Desktop/Code/makro" -> "makro". Returns "" for empty/root paths.
+// This is the concrete project anchor (stable, merges case variants) — the full path is
+// never stored; only this basename.
+func ProjectFromCwd(cwd string) string {
+	cwd = strings.TrimSpace(cwd)
+	if cwd == "" || cwd == "/" {
+		return ""
+	}
+	base := strings.ToLower(strings.TrimSpace(filepath.Base(cwd)))
+	if base == "" || base == "." || base == "/" {
+		return ""
+	}
+	return base
+}
+
+// ProjectFromClaudeDir derives a project name from a Claude session-storage directory name.
+// Claude encodes the cwd as the directory name with dashes, e.g.
+// "-Users-naglezhang-Desktop-Code-makro". We trim the known home prefix and lowercase,
+// but deliberately do NOT replace "-" with "/" (that lossy step produced garbage like
+// "car/agent"). So "-...-car-agent" -> "car-agent".
+func ProjectFromClaudeDir(dir string) string {
+	base := strings.ToLower(filepath.Base(dir))
+	for _, prefix := range []string{"-users-naglezhang-desktop-code-", "-users-naglezhang-", "-users-"} {
+		base = strings.TrimPrefix(base, prefix)
+	}
+	base = strings.Trim(base, "-")
+	return base
+}
+
+// CurrentProject returns the project name derived from the process's current working
+// directory, or "" if it can't be determined. Used by write entry points (CLI/agent)
+// so a memory written from within a project dir is automatically anchored to it.
+func CurrentProject() string {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return ""
+	}
+	return ProjectFromCwd(cwd)
+}

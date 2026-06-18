@@ -29,6 +29,7 @@ func (a *ClaudeAdapter) Ingest() ([]*store.Memory, error) {
 	projectsDir := filepath.Join(a.Path, "projects")
 	if dirs, err := findDirs(projectsDir, "memory"); err == nil {
 		for _, dir := range dirs {
+			project := ProjectFromClaudeDir(filepath.Dir(dir))
 			entries, _ := os.ReadDir(dir)
 			for _, e := range entries {
 				if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
@@ -55,6 +56,7 @@ func (a *ClaudeAdapter) Ingest() ([]*store.Memory, error) {
 						Scope:    "global",
 						Tags:     tags,
 						Source:   "claude",
+						Project:  project,
 					})
 				}
 			}

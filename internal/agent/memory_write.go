@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/cybernagle/memory-cli/internal/ingest"
 	"github.com/cybernagle/memory-cli/internal/store"
 )
 
@@ -15,7 +16,7 @@ type MemoryWriteTool struct {
 func (t *MemoryWriteTool) Name() string { return "memory_write" }
 
 func (t *MemoryWriteTool) Description() string {
-	return "Write a new memory. Without category, writes to inbox (auto-expires). With category, writes as organized (persistent)."
+	return "Write a new memory. Always writes to inbox. LLM pipeline will extract and organize long-term memories."
 }
 
 func (t *MemoryWriteTool) Parameters() ToolSchema {
@@ -49,12 +50,7 @@ func (t *MemoryWriteTool) Execute(ctx context.Context, params map[string]any) (T
 	var mem *store.Memory
 	var err error
 
-	if catStr, ok := params["category"].(string); ok && catStr != "" {
-		cat := store.Category(catStr)
-		mem, err = t.store.Write(content, store.PhaseOrganized, cat, scope, tags, source)
-	} else {
-		mem, err = t.store.WriteToInbox(content, scope, tags, source)
-	}
+	mem, err = t.store.WriteToInbox(content, scope, tags, source, ingest.CurrentProject())
 	if err != nil {
 		return ErrResult(fmt.Sprintf("write failed: %v", err)), err
 	}
