@@ -105,6 +105,11 @@ func (e *PipelineEngine) Run(ctx context.Context, tracker *processor.StatusTrack
 				log.Printf("[pipeline] mark consumed %s for %s: %v", id, proc.Name(), err)
 			} else {
 				totalResult.Processed++
+				// Also flip phase inbox→processed. MarkConsumed only sets the bitmask bit, leaving
+				// phase='inbox' — which inflates the dashboard's inbox count with items that are
+				// already consumed and will never be reprocessed. Aligning phase with the legacy
+				// processor path keeps List(Phase:inbox) honest.
+				_ = e.store.MarkProcessed(id)
 			}
 		}
 
