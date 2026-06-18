@@ -68,24 +68,31 @@ func runProcess(cmd *cobra.Command, args []string) error {
 	}
 	fmt.Printf("LLM: model=%s base=%s\n", llmClient.Model(), llmClient.BaseURL())
 
-	// Select inbox memories with optional filters. This is the key difference from the daemon
-	// path: we filter here so --project/--session/--limit actually constrain the work.
-	opts := store.ListOptions{Phase: store.PhaseInbox}
-	if processProject != "" {
-		opts.Project = processProject
-	}
-	if processSession != "" {
-		opts.SessionID = processSession
-	}
-	if processLimit > 0 {
-		opts.Limit = processLimit
+	// Select inbox memories NOT yet processed by "process-cmd". We use the consumed_mask
+	// bitmask (not phase) to track what's been done — the inbox phase is never changed,
+	// preserving the original data. This makes re-runs idempotent: only unprocessed items
+	// are picked up, so you can run `memory process` repeatedly without re-extracting.
+	allUnconsumed, err := s.ListUnconsumed("process-cmd")
+	if err != nil {
+		return fmt.Errorf("list unconsumed: %w", err)
 	}
 
-	inbox, err := s.List(opts)
-	if err != nil {
-		return fmt.Errorf("list inbox: %w", err)
+	// Apply optional filters (ListUnconsumed doesn't accept project/session/limit params).
+	var inbox []*store.Memory
+	for _, m := range allUnconsumed {
+		if processProject != "" && m.Project != processProject {
+			continue
+		}
+		if processSession != "" && m.SessionID != processSession {
+			continue
+		}
+		inbox = append(inbox, m)
+		if processLimit > 0 && len(inbox) >= processLimit {
+			break
+		}
 	}
-	fmt.Printf("Selected %d inbox memories", len(inbox))
+
+	fmt.Printf("Selected %d unprocessed inbox memories", len(inbox))
 	if processProject != "" {
 		fmt.Printf(" (project=%s)", processProject)
 	}
@@ -203,10 +210,17 @@ func runProcess(cmd *cobra.Command, args []string) error {
 
 	// Source inbox items are LEFT at phase=inbox. The user's principle: never delete or
 	// rephase original data — organized memories are additive, written as separate records
-	// (source="process-cmd"). This keeps the inbox count honest (it reflects all raw
-	// conversations ever captured) and makes re-processing safe/idempotent.
-	fmt.Printf("\n✓ Done: %d inbox → %d extracted → %d merged → %d organized written\n",
-		totalInput, len(allExtracted), len(merged), written)
+	// (source="process-cmd"). We track which inbox items have been processed via the
+	// consumed_mask bitmask (ConsumerProcessCmd), so re-runs skip them without mutating phase.
+	consumed := 0
+	for _, id := range allSourceIDs {
+		if err := s.MarkConsumed(id, "process-cmd"); err == nil {
+			consumed++
+		}
+	}
+
+	fmt.Printf("\n✓ Done: %d inbox → %d extracted → %d merged → %d organized written, %d inbox marked consumed\n",
+		totalInput, len(allExtracted), len(merged), written, consumed)
 	return nil
 }
 

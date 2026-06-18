@@ -15,6 +15,9 @@ const (
 	ConsumerConsolidateLLM // "consolidate-llm"
 	// ConsumerEnrichTags adds semantic concept/topic tags via the LLM enrichment task.
 	ConsumerEnrichTags // "enrich-tags"
+	// ConsumerProcessCmd marks inbox memories that the manual `memory process` command has
+	// already extracted+merged. Lets re-runs skip them without touching the inbox phase.
+	ConsumerProcessCmd // "process-cmd"
 )
 
 // consumerByName maps the string names used at the Store interface / pipeline boundary
@@ -23,6 +26,7 @@ var consumerByName = map[string]Consumer{
 	"fact-processor":  ConsumerFactProcessor,
 	"consolidate-llm": ConsumerConsolidateLLM,
 	"enrich-tags":     ConsumerEnrichTags,
+	"process-cmd":     ConsumerProcessCmd,
 }
 
 // ConsumerByName resolves a consumer's string name to its bitmask.
