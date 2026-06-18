@@ -201,16 +201,12 @@ func runProcess(cmd *cobra.Command, args []string) error {
 		written++
 	}
 
-	// Mark source inbox items as processed (phase flip, kept for audit — not deleted).
-	marked := 0
-	for _, id := range allSourceIDs {
-		if err := s.MarkProcessed(id); err == nil {
-			marked++
-		}
-	}
-
-	fmt.Printf("\n✓ Done: %d inbox → %d extracted → %d merged → %d organized written, %d inbox marked processed\n",
-		totalInput, len(allExtracted), len(merged), written, marked)
+	// Source inbox items are LEFT at phase=inbox. The user's principle: never delete or
+	// rephase original data — organized memories are additive, written as separate records
+	// (source="process-cmd"). This keeps the inbox count honest (it reflects all raw
+	// conversations ever captured) and makes re-processing safe/idempotent.
+	fmt.Printf("\n✓ Done: %d inbox → %d extracted → %d merged → %d organized written\n",
+		totalInput, len(allExtracted), len(merged), written)
 	return nil
 }
 
