@@ -10,10 +10,13 @@ type StatsResponse struct {
 	Total        int            `json:"total"`
 	Inbox        int            `json:"inbox"`
 	Organized    int            `json:"organized"`
+	Processed    int            `json:"processed"`
 	Categories   map[string]int `json:"categories"`
 	Sources      map[string]int `json:"sources"`
 	Tags         map[string]int `json:"tags"`
 	Projects     map[string]int `json:"projects"`
+	Roles        map[string]int `json:"roles"`
+	Phases       map[string]int `json:"phases"`
 	Recent24h    int            `json:"recent_24h"`
 	ExpiringSoon int            `json:"expiring_soon"`
 }
@@ -38,6 +41,8 @@ func ComputeStats(s statser) (*StatsResponse, error) {
 		Sources:    make(map[string]int),
 		Tags:       make(map[string]int),
 		Projects:   make(map[string]int),
+		Roles:      make(map[string]int),
+		Phases:     make(map[string]int),
 	}
 
 	for _, cat := range store.AllCategories {
@@ -52,7 +57,11 @@ func ComputeStats(s statser) (*StatsResponse, error) {
 			resp.Inbox++
 		case store.PhaseOrganized:
 			resp.Organized++
+		case store.PhaseProcessed:
+			resp.Processed++
 		}
+		// Full phase breakdown for the dashboard's processing-status panel.
+		resp.Phases[string(mem.Phase)]++
 
 		resp.Categories[string(mem.Category)]++
 
@@ -63,6 +72,14 @@ func ComputeStats(s statser) (*StatsResponse, error) {
 		if mem.Project != "" {
 			resp.Projects[mem.Project]++
 		}
+
+		// Role distribution: user vs assistant vs legacy (empty). Shows the ingest change's
+		// impact — old data has no role, new ingest captures both turns.
+		role := mem.Role
+		if role == "" {
+			role = "unknown"
+		}
+		resp.Roles[role]++
 
 		for _, tag := range mem.Tags {
 			resp.Tags[tag]++

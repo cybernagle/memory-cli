@@ -346,14 +346,22 @@ a:hover { text-decoration: underline; }
       </div>
     </div>
     <div class="card">
-      <h2>Category Distribution</h2>
+      <h2>Projects</h2>
       <div style="position:relative;height:260px">
-        <canvas id="categoryChart"></canvas>
+        <canvas id="projectChart"></canvas>
       </div>
     </div>
     <div class="card">
-      <h2>Projects</h2>
-      <div class="tag-cloud" id="projectCloud"></div>
+      <h2>Processing Status</h2>
+      <div class="tag-cloud" id="phaseCloud"></div>
+      <h2 style="margin-top:12px">Roles</h2>
+      <div class="tag-cloud" id="roleCloud"></div>
+    </div>
+    <div class="card">
+      <h2>Categories</h2>
+      <div style="position:relative;height:200px">
+        <canvas id="categoryChart"></canvas>
+      </div>
     </div>
   </div>
 
@@ -448,6 +456,7 @@ let currentFilter = 'all';
 let currentTab = 'overview';
 let allMemories = [];
 let categoryChart = null;
+let projectChart = null;
 let growthChart = null;
 let graphAnimId = null;
 let searchPage = 1;
@@ -528,13 +537,52 @@ async function loadStats() {
     return '<span class="tag-item" data-tag="' + escAttr(t[0]) + '">' + esc(t[0]) + '<span class="tag-count">' + t[1] + '</span></span>';
   }).join('');
 
-  const projects = Object.entries(stats.projects || {}).sort((a,b) => b[1]-a[1]).slice(0,24);
-  document.getElementById('projectCloud').innerHTML = projects.map(function(p) {
-    return '<span class="tag-item" data-project="' + escAttr(p[0]) + '">' + esc(p[0]) + '<span class="tag-count">' + p[1] + '</span></span>';
-  }).join('') || '<span class="muted">No projects yet</span>';
+  // Projects: horizontal bar chart (the most meaningful distribution dimension — which
+  // codebase each memory came from). Replaces the old category chart that was 95%+ knowledge.
+  const projects = Object.entries(stats.projects || {}).sort((a,b) => b[1]-a[1]).slice(0,15);
+  renderProjectChart(projects);
+
+  // Processing status (phase): inbox vs organized vs processed — shows how much raw
+  // conversation has been turned into structured memory.
+  const phases = Object.entries(stats.phases || {}).sort((a,b) => b[1]-a[1]);
+  document.getElementById('phaseCloud').innerHTML = phases.map(function(p) {
+    return '<span class="tag-item">' + esc(p[0]) + '<span class="tag-count">' + p[1] + '</span></span>';
+  }).join('') || '<span class="muted">No data</span>';
+
+  // Roles: user vs assistant vs unknown(legacy) — shows ingest coverage of both turns.
+  const roles = Object.entries(stats.roles || {}).sort((a,b) => b[1]-a[1]);
+  document.getElementById('roleCloud').innerHTML = roles.map(function(r) {
+    return '<span class="tag-item">' + esc(r[0]) + '<span class="tag-count">' + r[1] + '</span></span>';
+  }).join('') || '<span class="muted">No data</span>';
 
   renderChart(stats.categories);
   loadGrowthChart();
+}
+
+function renderProjectChart(projects) {
+  if (projectChart) projectChart.destroy();
+  if (projects.length === 0) return;
+  const labels = projects.map(p => p[0]);
+  const data = projects.map(p => p[1]);
+  projectChart = new Chart(document.getElementById('projectChart'), {
+    type: 'bar',
+    data: {
+      labels: labels,
+      datasets: [{
+        data: data,
+        backgroundColor: '#6c8aff',
+        borderRadius: 4,
+        barThickness: 16
+      }]
+    },
+    options: {
+      indexAxis: 'y',
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: { x: { beginAtZero: true } }
+    }
+  });
 }
 
 function renderChart(categories) {

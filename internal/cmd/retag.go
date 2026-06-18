@@ -74,14 +74,37 @@ var retagCmd = &cobra.Command{
 		}
 		fmt.Printf("Keyword backfill: scanned %d memories, added %d tags\n", len(all), tagsAdded)
 
-		// --- 2. Category cleanup: normalize garbage values and auto-categorize inbox memories ---
-		// NormalizeCategory collapses wiki-link leakage / overlong junk → inbox; then any memory
-		// still at inbox (the default) gets a content-derived category. Real categories are preserved.
+		// --- 2. Category cleanup: collapse the fragmented category field to the 13 standard types ---
+		// The category field had two failure modes: (a) ingest hardcoded everything to knowledge,
+		// (b) LLM processing pushed project/topic names (car-agent, makro, ios-slam-builder...) into
+		// it, producing 600+ fragmented values. Fix: if the current category is NOT one of the
+		// standard types, treat it as a misplaced topic tag — preserve it by adding it to tags —
+		// then re-derive a proper type category from content. Standard-type categories are kept.
+		isStandard := make(map[string]bool, len(store.AllCategories)+2)
+		for _, c := range store.AllCategories {
+			isStandard[string(c)] = true
+		}
+		isStandard[string(store.CategoryInbox)] = true
+		isStandard[string(store.CategoryReminders)] = true
+
 		catsChanged := 0
+		topicsMigrated := 0
 		for _, m := range all {
 			cur := store.Category(m.category)
-			next := store.NormalizeCategory(cur)
-			if next == store.CategoryInbox {
+			curStr := string(cur)
+			var next store.Category
+			if isStandard[curStr] {
+				// Already a standard type — keep it, but still normalize casing/aliases.
+				next = store.NormalizeCategory(cur)
+			} else {
+				// Non-standard (a project/topic name leaked in). Preserve it as a tag so no
+				// information is lost, then re-derive the type from content.
+				if curStr != "" {
+					if _, err := db.Exec("INSERT OR IGNORE INTO tags (memory_id, tag) VALUES (?, ?)", m.id, curStr); err != nil {
+						return fmt.Errorf("migrate topic tag: %w", err)
+					}
+					topicsMigrated++
+				}
 				next = store.CategorizeContent(m.content)
 			}
 			if next != cur {
@@ -91,7 +114,7 @@ var retagCmd = &cobra.Command{
 				catsChanged++
 			}
 		}
-		fmt.Printf("Category cleanup: normalized %d memories (garbage→inbox, inbox→categorized)\n", catsChanged)
+		fmt.Printf("Category cleanup: %d memories re-categorized, %d topic values migrated to tags\n", catsChanged, topicsMigrated)
 
 		// --- 3. Project backfill: recover project for memories missing it ---
 		// The project name was historically dumped into tags (e.g. "Makro", "car-agent").

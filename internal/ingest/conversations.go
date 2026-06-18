@@ -194,10 +194,18 @@ func parseJSONL(path, project, defaultSessionID string, isSubagentFile bool) []*
 			tags = append(tags, "agent:"+entry.AgentID)
 		}
 
+		// Categorize by content cues instead of a blanket "knowledge". Claude turns frequently
+		// carry decision/preference/lesson signal ("we decided...", "I prefer...", "lesson
+		// learned..."), so the keyword rules split the 90%+ knowledge blob into real types.
+		// Content with extractable keywords but no specific cue falls back to knowledge; truly
+		// signal-less content lands in inbox. This runs at ingest time so the distribution is
+		// useful immediately, before any LLM processing.
+		category := store.CategorizeContent(content)
+
 		memories = append(memories, &store.Memory{
 			Content:     content,
 			Phase:       store.PhaseInbox,
-			Category:    store.CategoryKnowledge,
+			Category:    category,
 			Scope:       "global",
 			Tags:        tags,
 			Source:      "conversations",
