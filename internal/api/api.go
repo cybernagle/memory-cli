@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"embed"
 	"encoding/json"
 	"fmt"
@@ -8,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cybernagle/memory-cli/internal/llm"
 	"github.com/cybernagle/memory-cli/internal/plugin"
 	"github.com/cybernagle/memory-cli/internal/store"
 )
@@ -32,6 +34,7 @@ type Server struct {
 	start    time.Time
 	dbPath   string
 	registry *plugin.Registry
+	llm      *llm.Client // optional: powers the /timeline narrative endpoint
 }
 
 func NewServer(s store.Store, dbPath string, keys []string) *Server {
@@ -50,6 +53,9 @@ func (s *Server) SetRegistry(r *plugin.Registry) {
 	s.registry = r
 }
 
+// SetLLM wires an LLM client for endpoints that need generation (e.g. /timeline narrative).
+func (s *Server) SetLLM(c *llm.Client) { s.llm = c }
+
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.mux.ServeHTTP(w, r)
 }
@@ -62,6 +68,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/memories", s.auth(s.handleMemories))
 	s.mux.HandleFunc("/memories/", s.auth(s.handleMemoryDetail))
 	s.mux.HandleFunc("/recall", s.auth(s.handleRecall))
+	s.mux.HandleFunc("/timeline", s.auth(s.handleTimeline))
 	s.mux.HandleFunc("/health", s.handleHealth)
 	s.mux.HandleFunc("/stats", s.auth(s.handleStats))
 	s.mux.HandleFunc("/stats/histogram", s.auth(s.handleHistogram))
@@ -361,6 +368,98 @@ func logActivity(s *Server, action, memoryID, source, detail string) {
 	if ss, ok := s.store.(*store.SqliteStore); ok {
 		ss.LogActivity(action, memoryID, source, detail)
 	}
+}
+
+// handleTimeline produces a narrative summary of what the user did/thought on a given day
+// (or date range). It aggregates category=capture memories in the window, feeds them to the
+// LLM for a 3-5 sentence narrative, and returns both the summary and the raw items.
+//
+// GET /timeline?date=2026-06-19           — single day
+// GET /timeline?from=-7d&to=&project=makro — range with project filter
+func (s *Server) handleTimeline(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	opts := store.ListOptions{Category: store.CategoryCapture, Limit: 500}
+
+	// Single-day shorthand: ?date=YYYY-MM-DD sets from/to to that day.
+	if date := q.Get("date"); date != "" {
+		if t, err := time.Parse("2006-01-02", date); err == nil {
+			opts.CreatedAfter = &t
+			end := t.Add(24*time.Hour - time.Second)
+			opts.CreatedBefore = &end
+		}
+	} else {
+		if from := q.Get("from"); from != "" {
+			if t, ok := parseTimeParam(from); ok {
+				opts.CreatedAfter = &t
+			}
+		}
+		if to := q.Get("to"); to != "" {
+			if t, ok := parseTimeParam(to); ok {
+				opts.CreatedBefore = &t
+			}
+		}
+	}
+	if project := q.Get("project"); project != "" {
+		opts.Project = project
+	}
+
+	items, err := s.store.List(opts)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	// Sort by time ascending (chronological flow).
+	for i, j := 0, len(items)-1; i < j; i, j = i+1, j-1 {
+		items[i], items[j] = items[j], items[i]
+	}
+
+	resp := map[string]any{
+		"count":   len(items),
+		"items":   items,
+	}
+
+	// Generate narrative summary if LLM is available and there are items to summarize.
+	if s.llm != nil && len(items) > 0 {
+		narrative, err := s.generateTimelineNarrative(r.Context(), items)
+		if err == nil && narrative != "" {
+			resp["summary"] = narrative
+		}
+	} else if len(items) == 0 {
+		resp["summary"] = "No activity captured for this period."
+	}
+
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// generateTimelineNarrative asks the LLM to summarize a day's captures into a short narrative.
+func (s *Server) generateTimelineNarrative(ctx context.Context, items []*store.Memory) (string, error) {
+	var sb strings.Builder
+	sb.WriteString("Summarize what the user did and thought about today, based on these captured messages. ")
+	sb.WriteString("Write 3-5 sentences in the user's language (Chinese if the content is Chinese). ")
+	sb.WriteString("Focus on: what they worked on, what ideas they had, what decisions they made. ")
+	sb.WriteString("Be specific — name projects, tools, topics. Do not list every message; synthesize.\n\n")
+
+	for i, m := range items {
+		if i >= 100 {
+			sb.WriteString(fmt.Sprintf("... and %d more messages\n", len(items)-100))
+			break
+		}
+		time := m.CreatedAt.Format("15:04")
+		content := m.Content
+		if len(content) > 200 {
+			content = content[:200] + "..."
+		}
+		role := m.Role
+		if role == "" {
+			role = "note"
+		}
+		sb.WriteString(fmt.Sprintf("[%s][%s] %s\n", time, role, content))
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+	return s.llm.Chat(ctx, sb.String())
 }
 
 // parseTimeParam parses a time query param. Supports relative ("-7d", "-12h", "-30m") and

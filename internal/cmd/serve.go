@@ -112,6 +112,7 @@ var serveCmd = &cobra.Command{
 				fmt.Printf("LLM ready: model=%s base=%s\n", llmClient.Model(), llmClient.BaseURL())
 				d.AddTask(&daemon.ConsolidateLLMTask{Store: sqliteStore, LLM: llmClient})
 				d.AddTask(&daemon.EnrichTagsTask{Store: sqliteStore, LLM: llmClient})
+				d.AddTask(&daemon.ProfileTask{Store: sqliteStore, LLM: llmClient})
 
 				// Use plugin pipeline if enabled, otherwise legacy processor
 				if cfg.Pipeline.Enabled {
@@ -205,6 +206,10 @@ var serveCmd = &cobra.Command{
 			dbPath = config.SQLiteDefaultPath()
 		}
 		apiSrv := api.NewServer(s, dbPath, cfg.API.Keys)
+			// Wire LLM client for narrative endpoints (/timeline) if available.
+			if llmClient, err := llm.NewClient(llm.Config{}); err == nil {
+				apiSrv.SetLLM(llmClient)
+			}
 		apiSrv.SetRegistry(pipelineReg)
 		apiAddr := "127.0.0.1:8765"
 		go func() {
