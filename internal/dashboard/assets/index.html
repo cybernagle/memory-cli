@@ -303,6 +303,30 @@ a:hover { text-decoration: underline; }
   font-size: 13px; font-weight: 600; text-transform: uppercase;
   letter-spacing: 0.5px; color: var(--text2); margin-bottom: 12px;
 }
+.heatmap-summary {
+  display: flex; gap: 18px; margin-bottom: 14px; flex-wrap: wrap;
+  font-size: 12px; color: var(--text2);
+}
+.heatmap-summary b { color: var(--text); font-size: 14px; }
+.heatmap-grid {
+  display: flex; flex-wrap: wrap; gap: 2px; align-items: flex-start;
+}
+.heatmap-cell {
+  width: 13px; height: 13px; border-radius: 2px;
+  background: #1e2230; /* level 0 = empty */
+}
+.heatmap-cell.lv1 { background: #0e4429; }
+.heatmap-cell.lv2 { background: #006d32; }
+.heatmap-cell.lv3 { background: #26a641; }
+.heatmap-cell.lv4 { background: #39d353; }
+.heatmap-week {
+  display: flex; flex-direction: column; gap: 2px;
+}
+.heatmap-legend {
+  display: flex; align-items: center; gap: 4px; margin-top: 10px;
+  font-size: 11px; color: var(--text2);
+}
+.heatmap-legend .heatmap-cell { width: 11px; height: 11px; }
 </style>
 </head>
 <body>
@@ -369,6 +393,25 @@ a:hover { text-decoration: underline; }
     <h2>Memory Growth</h2>
     <div style="position:relative;height:200px">
       <canvas id="growthChart"></canvas>
+    </div>
+  </div>
+
+  <div class="card grid-full">
+    <h2>Activity Heatmap</h2>
+    <div class="heatmap-summary" id="heatmapSummary"></div>
+    <div class="heatmap-grid" id="heatmapGrid"></div>
+  </div>
+
+  <div class="card">
+    <h2>By Hour of Day</h2>
+    <div style="position:relative;height:180px">
+      <canvas id="hourChart"></canvas>
+    </div>
+  </div>
+  <div class="card">
+    <h2>By Weekday</h2>
+    <div style="position:relative;height:180px">
+      <canvas id="weekdayChart"></canvas>
     </div>
   </div>
 
@@ -458,6 +501,8 @@ let allMemories = [];
 let categoryChart = null;
 let projectChart = null;
 let growthChart = null;
+let hourChart = null;
+let weekdayChart = null;
 let graphAnimId = null;
 let searchPage = 1;
 const PAGE_SIZE = 50;
@@ -1071,6 +1116,13 @@ async function loadGrowthChart() {
     var daily = cumData.map(function(d) { return d.count; });
     var cumulative = cumData.map(function(d) { return d.cumulative; });
 
+    // --- Activity heatmap (GitHub-style calendar grid) + hour/weekday breakdowns ---
+    // Same data fetch, three views. The calendar shows WHICH days were active; hour/weekday
+    // show WHEN in the day/week activity concentrates.
+    renderHeatmapGrid(days, data.summary || {});
+    renderHourChart(data.hours || []);
+    renderWeekdayChart(data.weekdays || []);
+
     if (growthChart) growthChart.destroy();
     growthChart = new Chart(document.getElementById('growthChart'), {
       type: 'line',
@@ -1119,7 +1171,99 @@ async function loadGrowthChart() {
   } catch(e) { console.warn('growth chart:', e); }
 }
 
-// Chat logic — Agent Search with SSE
+// GitHub-style calendar heatmap: columns are weeks (oldest left), rows are weekdays (Sun top).
+// Gives an at-a-glance view of which days were productive — denser than the growth line alone.
+function renderHeatmapGrid(days, summary) {
+  var grid = document.getElementById('heatmapGrid');
+  var summaryEl = document.getElementById('heatmapSummary');
+  if (!grid) return;
+
+  // Summary stats (streak, avg/day, best day)
+  if (summaryEl) {
+    summaryEl.innerHTML =
+      '<span><b>' + (summary.total || 0) + '</b> memories</span>' +
+      '<span><b>' + (summary.days || 0) + '</b> active days</span>' +
+      '<span><b>' + (summary.streak || 0) + '</b> day streak</span>' +
+      '<span><b>' + (summary.avg_day || 0) + '</b> avg/day</span>' +
+      '<span><b>' + (summary.max_day || 0) + '</b> best day';
+  }
+
+  // Build a date→level lookup so we can fill the full calendar grid (including empty days).
+  var levelByDate = {};
+  for (var i = 0; i < days.length; i++) {
+    levelByDate[days[i].date] = days[i].level;
+  }
+
+  // Determine the grid span: from the earliest day to today, aligned to week boundaries.
+  var startStr = days.length > 0 ? days[0].date : null;
+  if (!startStr) { grid.innerHTML = '<span class="muted">No activity</span>'; return; }
+  var start = new Date(startStr + 'T00:00:00');
+  var end = new Date();
+  // Move start back to the nearest Sunday so each column is a full week.
+  start.setDate(start.getDate() - start.getDay());
+
+  var weeks = [];
+  var cursor = new Date(start);
+  while (cursor <= end) {
+    var weekCells = [];
+    for (var d = 0; d < 7; d++) {
+      var dateStr = cursor.toISOString().slice(0, 10);
+      var level = levelByDate[dateStr] || 0;
+      weekCells.push('<div class="heatmap-cell lv' + level + '" title="' + dateStr + '"></div>');
+      cursor.setDate(cursor.getDate() + 1);
+    }
+    weeks.push('<div class="heatmap-week">' + weekCells.join('') + '</div>');
+  }
+  grid.innerHTML = weeks.join('') +
+    '<div class="heatmap-legend" style="width:100%">' +
+    'Less ' +
+    '<div class="heatmap-cell"></div>' +
+    '<div class="heatmap-cell lv1"></div>' +
+    '<div class="heatmap-cell lv2"></div>' +
+    '<div class="heatmap-cell lv3"></div>' +
+    '<div class="heatmap-cell lv4"></div>' +
+    ' More' +
+    '</div>';
+}
+
+function renderHourChart(hours) {
+  if (hourChart) hourChart.destroy();
+  if (!hours || hours.length === 0) return;
+  var labels = [];
+  for (var h = 0; h < 24; h++) { labels.push((h % 12 || 12) + (h < 12 ? 'a' : 'p')); }
+  hourChart = new Chart(document.getElementById('hourChart'), {
+    type: 'bar',
+    data: {
+      labels: labels,
+      datasets: [{ data: hours, backgroundColor: '#6c8aff', borderRadius: 2 }]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: { x: { grid: { display: false }, ticks: { color: '#8b8fa8', font: { size: 9 } } },
+                y: { beginAtZero: true, ticks: { color: '#8b8fa8' } } }
+    }
+  });
+}
+
+function renderWeekdayChart(weekdays) {
+  if (weekdayChart) weekdayChart.destroy();
+  if (!weekdays || weekdays.length === 0) return;
+  var names = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  weekdayChart = new Chart(document.getElementById('weekdayChart'), {
+    type: 'bar',
+    data: {
+      labels: names,
+      datasets: [{ data: weekdays, backgroundColor: '#4ade80', borderRadius: 3, barThickness: 24 }]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: { x: { grid: { display: false }, ticks: { color: '#8b8fa8' } },
+                y: { beginAtZero: true, ticks: { color: '#8b8fa8' } } }
+    }
+  });
+}
 async function sendChat() {
   if (chatLoading) return;
   var input = document.getElementById('chatInput');

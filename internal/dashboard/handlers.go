@@ -264,9 +264,15 @@ func (srv *Server) handleHeatmap(w http.ResponseWriter, r *http.Request) {
 	}
 
 	countMap := make(map[string]int)
+	// Hour-of-day (0-23) and weekday (0=Sunday..6=Saturday) distributions — reveal when the
+	// user is most active (late-night hacking? weekday vs weekend?).
+	hourCounts := make([]int, 24)
+	weekdayCounts := make([]int, 7)
 	for _, m := range all {
 		key := m.CreatedAt.Format("2006-01-02")
 		countMap[key]++
+		hourCounts[m.CreatedAt.Hour()]++
+		weekdayCounts[int(m.CreatedAt.Weekday())]++
 	}
 
 	var days []dayCount
@@ -316,6 +322,8 @@ func (srv *Server) handleHeatmap(w http.ResponseWriter, r *http.Request) {
 			"max_day": maxCount,
 			"avg_day": avgDay,
 		},
+		"hours":    hourCounts,
+		"weekdays": weekdayCounts,
 	})
 }
 
