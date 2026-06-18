@@ -97,6 +97,14 @@ var serveCmd = &cobra.Command{
 		d := daemon.New(s, interval, decayThreshold, cfg.Daemon.UpgradeAccess, notifier)
 		var pipelineReg *plugin.Registry
 
+		// Reminder task — always enabled (doesn't need LLM, just checks the reminders table
+		// every tick and fires macOS notifications for due items).
+		reminderTask := daemon.NewReminderTask(cfg)
+		if sqliteStore, ok := s.(*store.SqliteStore); ok {
+			reminderTask.SetStore(sqliteStore)
+		}
+		d.AddTask(reminderTask)
+
 		// Wire LLM processor if an API key is available (MEMORY_LLM_API_KEY / legacy ANTHROPIC_*).
 		// A single GLM-4.5-Flash client serves extraction, consolidation, and enrichment.
 		if llmClient, err := llm.NewClient(llm.Config{}); err == nil {

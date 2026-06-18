@@ -72,6 +72,21 @@ CREATE TABLE IF NOT EXISTS activity_log (
 CREATE INDEX IF NOT EXISTS idx_activity_created ON activity_log(created_at);
 CREATE INDEX IF NOT EXISTS idx_activity_action ON activity_log(action);
 
+-- Reminders are event-driven triggers, separate from knowledge memories. A reminder carries
+-- a trigger_at timestamp and a status lifecycle (pending → fired → done). This keeps the
+-- temporary task queue from polluting the permanent fact store.
+CREATE TABLE IF NOT EXISTS reminders (
+    id         TEXT PRIMARY KEY,
+    content    TEXT NOT NULL,
+    trigger_at TEXT NOT NULL,
+    status     TEXT NOT NULL DEFAULT 'pending',
+    created_at TEXT NOT NULL,
+    fired_at   TEXT,
+    source     TEXT NOT NULL DEFAULT 'cli'
+);
+CREATE INDEX IF NOT EXISTS idx_reminders_trigger ON reminders(trigger_at);
+CREATE INDEX IF NOT EXISTS idx_reminders_status ON reminders(status);
+
 CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
     memory_id UNINDEXED,
     content,
