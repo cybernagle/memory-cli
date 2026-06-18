@@ -18,8 +18,9 @@ CREATE TABLE IF NOT EXISTS memories (
     created_at   TEXT NOT NULL,
     updated_at   TEXT NOT NULL,
     expires_at   TEXT,
-    access_count INTEGER NOT NULL DEFAULT 0,
-    version      INTEGER NOT NULL DEFAULT 1
+    access_count  INTEGER NOT NULL DEFAULT 0,
+    version       INTEGER NOT NULL DEFAULT 1,
+    processed_by  TEXT    NOT NULL DEFAULT '[]'
 );
 
 CREATE INDEX IF NOT EXISTS idx_memories_phase ON memories(phase);
@@ -29,6 +30,7 @@ CREATE INDEX IF NOT EXISTS idx_memories_source ON memories(source);
 CREATE INDEX IF NOT EXISTS idx_memories_session ON memories(session_id);
 CREATE INDEX IF NOT EXISTS idx_memories_hash ON memories(content_hash);
 CREATE INDEX IF NOT EXISTS idx_memories_expires ON memories(expires_at) WHERE expires_at IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_memories_phase_processed ON memories(phase, processed_by);
 
 CREATE TABLE IF NOT EXISTS tags (
     memory_id TEXT NOT NULL,

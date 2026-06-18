@@ -55,7 +55,7 @@ func (s *FileStore) Init() error {
 	return nil
 }
 
-func (s *FileStore) WriteToInbox(content string, scope string, tags []string, source string) (*Memory, error) {
+func (s *FileStore) WriteToInbox(content string, scope string, tags []string, source string, project string) (*Memory, error) {
 	now := time.Now()
 	mem := &Memory{
 		ID:          uuid.New().String(),
@@ -66,6 +66,7 @@ func (s *FileStore) WriteToInbox(content string, scope string, tags []string, so
 		Scope:       defaultString(scope, "global"),
 		Tags:        tags,
 		Source:      defaultString(source, "manual"),
+		Project:     project,
 		CreatedAt:   now,
 		UpdatedAt:   now,
 		Version:     1,
@@ -141,6 +142,8 @@ type ListOptions struct {
 	Scope         string
 	Source        string
 	SessionID     string
+	Project       string
+	PromptID      string
 	Limit         int
 	CreatedAfter  *time.Time
 	CreatedBefore *time.Time

@@ -166,3 +166,11 @@ func (s *FileStore) IngestMemory(mem *Memory) error {
 func (s *FileStore) MarkProcessed(id string) error {
 	return nil
 }
+
+func (s *FileStore) MarkConsumed(id string, processorName string) error {
+	return nil
+}
+
+func (s *FileStore) ListUnconsumed(processorName string) ([]*Memory, error) {
+	return s.List(ListOptions{Phase: PhaseInbox})
+}

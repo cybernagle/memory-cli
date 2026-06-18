@@ -2,6 +2,7 @@ package store
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -53,6 +54,46 @@ func (s *SqliteStore) init() error {
 
 	// Migrate: recreate links table without target_id FK (wiki-links are text labels, not memory IDs)
 	s.migrateLinksTable()
+
+	// Migrate: add processed_by column for per-processor consumption tracking
+	s.db.Exec("ALTER TABLE memories ADD COLUMN processed_by TEXT NOT NULL DEFAULT '[]'")
+	s.db.Exec("UPDATE memories SET processed_by = '[]' WHERE processed_by IS NULL")
+
+	// Migrate: add raw_entry_id column linking each memory to its append-only raw_entries source.
+	s.db.Exec("ALTER TABLE memories ADD COLUMN raw_entry_id TEXT")
+
+	// Migrate: add project column (cwd basename anchor) for provenance by project.
+	s.db.Exec("ALTER TABLE memories ADD COLUMN project TEXT")
+	s.db.Exec("UPDATE memories SET project = '' WHERE project IS NULL")
+	s.db.Exec("CREATE INDEX IF NOT EXISTS idx_memories_project ON memories(project)")
+
+	// Migrate: add consumed_mask (bitmask of consumers that have processed this memory).
+	// Each consumer owns a bit; marking is a single atomic `mask | bit` UPDATE.
+	s.db.Exec("ALTER TABLE memories ADD COLUMN consumed_mask INTEGER NOT NULL DEFAULT 0")
+	s.db.Exec("UPDATE memories SET consumed_mask = 0 WHERE consumed_mask IS NULL")
+
+	// Migrate: ingest-time provenance enrichment. These columns capture the conversation
+	// context a memory came from, so downstream aggregation can thread/group by them.
+	// Each ALTER is idempotent — SQLite errors "duplicate column name" on re-run and the
+	// error is discarded, matching the existing migration pattern in this init().
+	s.db.Exec("ALTER TABLE memories ADD COLUMN message_uuid TEXT NOT NULL DEFAULT ''")
+	s.db.Exec("ALTER TABLE memories ADD COLUMN parent_uuid TEXT NOT NULL DEFAULT ''")
+	s.db.Exec("ALTER TABLE memories ADD COLUMN role TEXT NOT NULL DEFAULT ''")
+	s.db.Exec("ALTER TABLE memories ADD COLUMN git_branch TEXT NOT NULL DEFAULT ''")
+	s.db.Exec("ALTER TABLE memories ADD COLUMN model TEXT NOT NULL DEFAULT ''")
+	s.db.Exec("ALTER TABLE memories ADD COLUMN prompt_id TEXT NOT NULL DEFAULT ''")
+	s.db.Exec("CREATE INDEX IF NOT EXISTS idx_memories_prompt ON memories(prompt_id)")
+	s.db.Exec("CREATE INDEX IF NOT EXISTS idx_memories_parent_uuid ON memories(parent_uuid)")
+
+	// Backfill the append-only raw_entries from existing memories and link them.
+	// Idempotent: INSERT OR IGNORE dedups by content_hash (PK); the UPDATE is a no-op once raw_entry_id is set.
+	// This guarantees every memory — including those written before raw capture existed — has a permanent source.
+	s.db.Exec(`INSERT OR IGNORE INTO raw_entries (id, content, source, content_hash)
+		SELECT content_hash, content, source, content_hash
+		FROM memories WHERE content_hash != ''`)
+	s.db.Exec(`UPDATE memories SET raw_entry_id = content_hash
+		WHERE raw_entry_id IS NULL AND content_hash != ''`)
+
 	return nil
 }
 
@@ -82,7 +123,7 @@ func (s *SqliteStore) migrateLinksTable() {
 	s.db.Exec("PRAGMA foreign_keys=ON")
 }
 
-func (s *SqliteStore) WriteToInbox(content string, scope string, tags []string, source string) (*Memory, error) {
+func (s *SqliteStore) WriteToInbox(content string, scope string, tags []string, source string, project string) (*Memory, error) {
 	now := time.Now()
 	ttl, err := parseDuration("168h")
 	if err != nil {
@@ -98,6 +139,7 @@ func (s *SqliteStore) WriteToInbox(content string, scope string, tags []string, 
 		Scope:       defaultString(scope, "global"),
 		Tags:        tags,
 		Source:      defaultString(source, "manual"),
+		Project:     project,
 		CreatedAt:   now,
 		UpdatedAt:   now,
 		ExpiresAt:   &expires,
@@ -161,7 +203,7 @@ func (s *SqliteStore) Delete(id string) error {
 }
 
 func (s *SqliteStore) List(opts ListOptions) ([]*Memory, error) {
-	query := "SELECT id, content, content_hash, phase, category, scope, source, session_id, created_at, updated_at, expires_at, access_count, version FROM memories WHERE 1=1"
+	query := "SELECT id, content, content_hash, phase, category, scope, source, session_id, created_at, updated_at, expires_at, access_count, version, processed_by, project, consumed_mask, message_uuid, parent_uuid, role, git_branch, model, prompt_id FROM memories WHERE 1=1"
 	var args []any
 
 	if opts.Category != "" {
@@ -183,6 +225,14 @@ func (s *SqliteStore) List(opts ListOptions) ([]*Memory, error) {
 	if opts.SessionID != "" {
 		query += " AND session_id = ?"
 		args = append(args, opts.SessionID)
+	}
+	if opts.Project != "" {
+		query += " AND project = ?"
+		args = append(args, opts.Project)
+	}
+	if opts.PromptID != "" {
+		query += " AND prompt_id = ?"
+		args = append(args, opts.PromptID)
 	}
 	if opts.CreatedAfter != nil {
 		query += " AND created_at > ?"
@@ -325,9 +375,74 @@ func (s *SqliteStore) MarkProcessed(id string) error {
 	return err
 }
 
+// MarkConsumed records that a consumer has processed a memory, using a single atomic
+// bitwise-OR update on consumed_mask. Because the read-modify-write happens inside one
+// SQL statement, concurrent consumers can never lose each other's marks (no race).
+// Unknown consumer names are a no-op (logged by callers if needed). The legacy
+// processed_by column is no longer written — consumed_mask is the source of truth.
+func (s *SqliteStore) MarkConsumed(id string, processorName string) error {
+	c, ok := ConsumerByName(processorName)
+	if !ok {
+		return nil
+	}
+	_, err := s.db.Exec("UPDATE memories SET consumed_mask = consumed_mask | ?, updated_at = ? WHERE id = ?",
+		int64(c), time.Now().Format(time.RFC3339), id)
+	return err
+}
+
+func (s *SqliteStore) ListUnconsumed(processorName string) ([]*Memory, error) {
+	c, ok := ConsumerByName(processorName)
+	if !ok {
+		return nil, nil
+	}
+	rows, err := s.db.Query(`
+		SELECT id, content, content_hash, phase, category, scope, source, session_id,
+		       created_at, updated_at, expires_at, access_count, version, processed_by, project, consumed_mask,
+		       message_uuid, parent_uuid, role, git_branch, model, prompt_id
+		FROM memories
+		WHERE phase = 'inbox' AND (consumed_mask & ?) = 0
+		ORDER BY created_at ASC`,
+		int64(c))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var ids []string
+	var rawMemories []*Memory
+	for rows.Next() {
+		mem, err := scanMemoryRow(rows)
+		if err != nil {
+			continue
+		}
+		ids = append(ids, mem.ID)
+		rawMemories = append(rawMemories, mem)
+	}
+
+	if len(ids) == 0 {
+		return nil, nil
+	}
+
+	tagMap, _ := s.batchLoadTags(ids)
+	linkMap, _ := s.batchLoadLinks(ids)
+
+	for _, mem := range rawMemories {
+		mem.Tags = tagMap[mem.ID]
+		if mem.Tags == nil {
+			mem.Tags = []string{}
+		}
+		mem.Links = linkMap[mem.ID]
+		if mem.Links == nil {
+			mem.Links = []string{}
+		}
+	}
+
+	return rawMemories, nil
+}
+
 func (s *SqliteStore) FindByID(id string) (*Memory, error) {
 	row := s.db.QueryRow(
-		"SELECT id, content, content_hash, phase, category, scope, source, session_id, created_at, updated_at, expires_at, access_count, version FROM memories WHERE id = ?",
+		"SELECT id, content, content_hash, phase, category, scope, source, session_id, created_at, updated_at, expires_at, access_count, version, processed_by, project, consumed_mask, message_uuid, parent_uuid, role, git_branch, model, prompt_id FROM memories WHERE id = ?",
 		id)
 	mem, err := scanMemoryRowSingle(row)
 	if err != nil {
@@ -351,7 +466,7 @@ func (s *SqliteStore) FindByID(id string) (*Memory, error) {
 
 func (s *SqliteStore) FindByHash(hash string) (*Memory, error) {
 	row := s.db.QueryRow(
-		"SELECT id, content, content_hash, phase, category, scope, source, session_id, created_at, updated_at, expires_at, access_count, version FROM memories WHERE content_hash = ?",
+		"SELECT id, content, content_hash, phase, category, scope, source, session_id, created_at, updated_at, expires_at, access_count, version, processed_by, project, consumed_mask, message_uuid, parent_uuid, role, git_branch, model, prompt_id FROM memories WHERE content_hash = ?",
 		hash)
 	mem, err := scanMemoryRowSingle(row)
 	if err != nil {
@@ -380,7 +495,8 @@ func (s *SqliteStore) Search(opts SearchOptions) ([]*Memory, error) {
 	// Try FTS5 first
 	rows, err := s.db.Query(`
 		SELECT m.id, m.content, m.content_hash, m.phase, m.category, m.scope, m.source,
-		       m.session_id, m.created_at, m.updated_at, m.expires_at, m.access_count, m.version
+		       m.session_id, m.created_at, m.updated_at, m.expires_at, m.access_count, m.version, m.processed_by, m.project, m.consumed_mask,
+		       m.message_uuid, m.parent_uuid, m.role, m.git_branch, m.model, m.prompt_id
 		FROM memories m
 		WHERE m.id IN (
 			SELECT memory_id FROM memories_fts WHERE memories_fts MATCH ?
@@ -508,7 +624,8 @@ func (s *SqliteStore) ResolveBacklinks() (int, error) {
 func (s *SqliteStore) GetBacklinks(id string) ([]*Memory, error) {
 	rows, err := s.db.Query(`
 		SELECT m.id, m.content, m.content_hash, m.phase, m.category, m.scope, m.source,
-		       m.session_id, m.created_at, m.updated_at, m.expires_at, m.access_count, m.version
+		       m.session_id, m.created_at, m.updated_at, m.expires_at, m.access_count, m.version, m.processed_by, m.project, m.consumed_mask,
+		       m.message_uuid, m.parent_uuid, m.role, m.git_branch, m.model, m.prompt_id
 		FROM links l
 		JOIN memories m ON m.id = l.source_id
 		WHERE l.target_id = ?`, id)
@@ -626,6 +743,14 @@ func (s *SqliteStore) InboxCount() (int, error) {
 	return count, err
 }
 
+// RawEntryCount returns the number of rows in the append-only raw_entries table.
+// Useful for verifying that raw capture is working and that nothing is ever deleted.
+func (s *SqliteStore) RawEntryCount() (int64, error) {
+	var count int64
+	err := s.db.QueryRow("SELECT COUNT(*) FROM raw_entries").Scan(&count)
+	return count, err
+}
+
 // Internal helpers
 
 func (s *SqliteStore) InsertMemory(mem *Memory) error {
@@ -634,18 +759,52 @@ func (s *SqliteStore) InsertMemory(mem *Memory) error {
 		return err
 	}
 
-	_, err = tx.Exec(`INSERT INTO memories (id, content, content_hash, phase, category, scope, source, session_id, created_at, updated_at, expires_at, access_count, version)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		mem.ID, mem.Content, mem.ContentHash, string(mem.Phase), string(mem.Category),
+	pbData, _ := json.Marshal(mem.ProcessedBy)
+	if mem.ProcessedBy == nil || string(pbData) == "null" {
+		pbData = []byte("[]")
+	}
+
+	// Append-only raw capture: every memory is recorded in raw_entries and is never deleted.
+	// content_hash is the primary key, so INSERT OR IGNORE dedups identical content idempotently.
+	rawHash := mem.ContentHash
+	if rawHash == "" {
+		rawHash = HashContent(mem.Content)
+	}
+	if _, err = tx.Exec(
+		`INSERT OR IGNORE INTO raw_entries (id, content, source, content_hash) VALUES (?, ?, ?, ?)`,
+		rawHash, mem.Content, mem.Source, rawHash,
+	); err != nil {
+		tx.Rollback()
+		return err
+	}
+
+	// Auto-categorize at the chokepoint: when no real category was given (the default inbox),
+	// derive one from content. Real categories (explicit user/LLM) are preserved. Uses a local
+	// so the caller's mem.Category is not mutated as a side effect.
+	categoryVal := mem.Category
+	if categoryVal == CategoryInbox {
+		categoryVal = CategorizeContent(mem.Content)
+	}
+
+	_, err = tx.Exec(`INSERT INTO memories (id, content, content_hash, phase, category, scope, source, session_id, created_at, updated_at, expires_at, access_count, version, processed_by, raw_entry_id, project, consumed_mask, message_uuid, parent_uuid, role, git_branch, model, prompt_id)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		mem.ID, mem.Content, mem.ContentHash, string(mem.Phase), string(categoryVal),
 		mem.Scope, mem.Source, mem.SessionID,
 		mem.CreatedAt.Format(time.RFC3339), mem.UpdatedAt.Format(time.RFC3339),
-		formatTime(mem.ExpiresAt), mem.AccessCount, mem.Version)
+		formatTime(mem.ExpiresAt), mem.AccessCount, mem.Version, string(pbData), rawHash, mem.Project, mem.ConsumedMask,
+		mem.MessageUUID, mem.ParentUUID, mem.Role, mem.GitBranch, mem.Model, mem.PromptID)
 	if err != nil {
 		tx.Rollback()
 		return err
 	}
 
-	for _, tag := range mem.Tags {
+	// Auto-enrich tags with high-precision keywords extracted from content (free, no LLM).
+	// Done at the single insert chokepoint so every memory — regardless of entry path — gets
+	// semantic tags, not just provenance tags from the caller. Uses a local slice so the
+	// caller's mem.Tags is not mutated as a side effect.
+	tagsToInsert := mergeTags(mem.Tags, ExtractKeywords(mem.Content))
+
+	for _, tag := range tagsToInsert {
 		_, err = tx.Exec("INSERT OR IGNORE INTO tags (memory_id, tag) VALUES (?, ?)", mem.ID, tag)
 		if err != nil {
 			tx.Rollback()
@@ -655,7 +814,7 @@ func (s *SqliteStore) InsertMemory(mem *Memory) error {
 
 	// Wiki-links are resolved later by ResolveBacklinks()
 
-	tagsStr := strings.Join(mem.Tags, " ")
+	tagsStr := strings.Join(tagsToInsert, " ")
 	_, err = tx.Exec("INSERT INTO memories_fts (memory_id, content, tags, scope, source) VALUES (?, ?, ?, ?, ?)",
 		mem.ID, mem.Content, tagsStr, mem.Scope, mem.Source)
 	if err != nil {
@@ -773,11 +932,13 @@ func (s *SqliteStore) linkExists(sourceID, targetID string) bool {
 
 func scanMemoryRow(rows *sql.Rows) (*Memory, error) {
 	var mem Memory
-	var phase, category, scope, source, sessionID string
+	var phase, category, scope, source, sessionID, project string
 	var createdAt, updatedAt string
 	var expiresAt sql.NullString
+	var processedBy string
 	err := rows.Scan(&mem.ID, &mem.Content, &mem.ContentHash, &phase, &category,
-		&scope, &source, &sessionID, &createdAt, &updatedAt, &expiresAt, &mem.AccessCount, &mem.Version)
+		&scope, &source, &sessionID, &createdAt, &updatedAt, &expiresAt, &mem.AccessCount, &mem.Version, &processedBy, &project, &mem.ConsumedMask,
+		&mem.MessageUUID, &mem.ParentUUID, &mem.Role, &mem.GitBranch, &mem.Model, &mem.PromptID)
 	if err != nil {
 		return nil, err
 	}
@@ -786,6 +947,7 @@ func scanMemoryRow(rows *sql.Rows) (*Memory, error) {
 	mem.Scope = scope
 	mem.Source = source
 	mem.SessionID = sessionID
+	mem.Project = project
 	mem.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
 	mem.UpdatedAt, _ = time.Parse(time.RFC3339, updatedAt)
 	if expiresAt.Valid && expiresAt.String != "" {
@@ -793,17 +955,23 @@ func scanMemoryRow(rows *sql.Rows) (*Memory, error) {
 		if err == nil {
 			mem.ExpiresAt = &t
 		}
+	}
+	json.Unmarshal([]byte(processedBy), &mem.ProcessedBy)
+	if mem.ProcessedBy == nil {
+		mem.ProcessedBy = []string{}
 	}
 	return &mem, nil
 }
 
 func scanMemoryRowSingle(row *sql.Row) (*Memory, error) {
 	var mem Memory
-	var phase, category, scope, source, sessionID string
+	var phase, category, scope, source, sessionID, project string
 	var createdAt, updatedAt string
 	var expiresAt sql.NullString
+	var processedBy string
 	err := row.Scan(&mem.ID, &mem.Content, &mem.ContentHash, &phase, &category,
-		&scope, &source, &sessionID, &createdAt, &updatedAt, &expiresAt, &mem.AccessCount, &mem.Version)
+		&scope, &source, &sessionID, &createdAt, &updatedAt, &expiresAt, &mem.AccessCount, &mem.Version, &processedBy, &project, &mem.ConsumedMask,
+		&mem.MessageUUID, &mem.ParentUUID, &mem.Role, &mem.GitBranch, &mem.Model, &mem.PromptID)
 	if err != nil {
 		return nil, err
 	}
@@ -812,6 +980,7 @@ func scanMemoryRowSingle(row *sql.Row) (*Memory, error) {
 	mem.Scope = scope
 	mem.Source = source
 	mem.SessionID = sessionID
+	mem.Project = project
 	mem.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
 	mem.UpdatedAt, _ = time.Parse(time.RFC3339, updatedAt)
 	if expiresAt.Valid && expiresAt.String != "" {
@@ -819,6 +988,10 @@ func scanMemoryRowSingle(row *sql.Row) (*Memory, error) {
 		if err == nil {
 			mem.ExpiresAt = &t
 		}
+	}
+	json.Unmarshal([]byte(processedBy), &mem.ProcessedBy)
+	if mem.ProcessedBy == nil {
+		mem.ProcessedBy = []string{}
 	}
 	return &mem, nil
 }

@@ -3,7 +3,7 @@ package store
 // Store defines the interface for memory storage backends.
 type Store interface {
 	// CRUD
-	WriteToInbox(content string, scope string, tags []string, source string) (*Memory, error)
+	WriteToInbox(content string, scope string, tags []string, source string, project string) (*Memory, error)
 	Write(content string, memType Phase, category Category, scope string, tags []string, source string) (*Memory, error)
 	Read(id string) (*Memory, error)
 	Delete(id string) error
@@ -29,4 +29,10 @@ type Store interface {
 
 	// Mark an inbox memory as processed (phase = "processed")
 	MarkProcessed(id string) error
+
+	// Mark an inbox memory as consumed by a specific processor
+	MarkConsumed(id string, processorName string) error
+
+	// List inbox memories not yet consumed by the given processor
+	ListUnconsumed(processorName string) ([]*Memory, error)
 }
