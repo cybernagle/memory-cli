@@ -89,6 +89,7 @@ func getAdapters(customPath string) map[string]ingest.Adapter {
 	return map[string]ingest.Adapter{
 		"claude":        &ingest.ClaudeAdapter{Path: filepath.Join(home, ".claude")},
 		"conversations": &ingest.ConversationsAdapter{Path: filepath.Join(home, ".claude", "projects")},
+		"zcode":         &ingest.ZcodeAdapter{Path: filepath.Join(home, ".zcode", "cli", "rollout")},
 		"car-agent":     &ingest.CarAgentAdapter{Path: filepath.Join(home, ".car-agent")},
 		"fingersaver":   &ingest.FingersaverAdapter{Path: filepath.Join(home, ".fingersaver")},
 		"logseq":        &ingest.LogseqAdapter{Path: customPath},
@@ -98,7 +99,7 @@ func getAdapters(customPath string) map[string]ingest.Adapter {
 
 func parseSources(source string) []string {
 	if source == "all" {
-		return []string{"claude", "conversations", "car-agent", "fingersaver", "logseq", "obsidian"}
+		return []string{"claude", "conversations", "zcode", "car-agent", "fingersaver", "logseq", "obsidian"}
 	}
 	return strings.Split(source, ",")
 }

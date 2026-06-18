@@ -187,11 +187,39 @@ func (c *Client) Extract(ctx context.Context, req ExtractRequest) ([]ExtractedMe
 		return nil, fmt.Errorf("llm call: %w", err)
 	}
 
+	// Parse defensively: GLM-Flash often returns malformed categories (nested arrays like
+	// [["x"],["y"]], single objects instead of arrays, or extra fields). Parse into raw maps
+	// and coerce each field, mirroring the Merge path's robustness.
+	jsonStr := repairJSON(extractJSON(result.text))
+	var rawItems []map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(jsonStr), &rawItems); err != nil {
+		return nil, fmt.Errorf("parse llm response: %w\nraw: %s", err, truncateRaw(result.text))
+	}
 	var memories []ExtractedMemory
-	if err := json.Unmarshal([]byte(extractJSON(result.text)), &memories); err != nil {
-		return nil, fmt.Errorf("parse llm response: %w\nraw: %s", err, result.text)
+	for _, item := range rawItems {
+		var m ExtractedMemory
+		if v, ok := item["content"]; ok {
+			json.Unmarshal(v, &m.Content)
+		}
+		if v, ok := item["categories"]; ok {
+			m.Categories = parseStringArray(v)
+		}
+		if v, ok := item["tags"]; ok {
+			m.Tags = parseStringArray(v)
+		}
+		if v, ok := item["confidence"]; ok {
+			json.Unmarshal(v, &m.Confidence)
+		}
+		memories = append(memories, m)
 	}
 	return memories, nil
+}
+
+func truncateRaw(s string) string {
+	if len(s) > 500 {
+		return s[:500]
+	}
+	return s
 }
 
 type MergeRequest struct {
