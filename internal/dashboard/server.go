@@ -30,6 +30,7 @@ func NewServer(s Store, llmClient *llm.Client) *Server {
 	mux.HandleFunc("GET /api/memories/{id}/links", srv.handleLinks)
 	mux.HandleFunc("GET /api/memories/{id}", srv.handleMemoryDetail)
 	mux.HandleFunc("GET /api/memories", srv.handleMemories)
+	mux.HandleFunc("GET /api/memories/timeline", srv.handleTimeline)
 	mux.HandleFunc("GET /api/search", srv.handleSearch)
 	mux.HandleFunc("GET /api/graph", srv.handleGraph)
 	mux.HandleFunc("POST /api/ask", srv.handleAsk)

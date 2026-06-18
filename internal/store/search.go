@@ -6,16 +6,19 @@ import (
 )
 
 type SearchOptions struct {
-	Query string
-	Tags  []string
-	Scope string
-	Phase Phase
-	From  *time.Time
-	To    *time.Time
+	Query    string
+	Tags     []string
+	Scope    string
+	Phase    Phase
+	Project  string
+	SessionID string
+	Category Category
+	From     *time.Time
+	To       *time.Time
 }
 
 func (s *FileStore) Search(opts SearchOptions) ([]*Memory, error) {
-	all, err := s.List(ListOptions{Phase: opts.Phase, Scope: opts.Scope})
+	all, err := s.List(ListOptions{Phase: opts.Phase, Scope: opts.Scope, Project: opts.Project, SessionID: opts.SessionID, Category: opts.Category})
 	if err != nil {
 		return nil, err
 	}

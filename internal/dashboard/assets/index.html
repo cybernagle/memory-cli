@@ -458,8 +458,16 @@ a:hover { text-decoration: underline; }
         <option value="processed">Processed</option>
         <option value="organized">Organized</option>
       </select>
+      <select id="sqProject"><option value="">All Projects</option></select>
       <select id="sqCategory"><option value="">All Categories</option></select>
       <select id="sqSource"><option value="">All Sources</option></select>
+      <select id="sqTimeRange">
+        <option value="">All Time</option>
+        <option value="1">Last 24h</option>
+        <option value="7">Last 7 days</option>
+        <option value="30">Last 30 days</option>
+        <option value="90">Last 90 days</option>
+      </select>
       <button class="search-btn" id="sqBtn">Search</button>
     </div>
     <div class="search-count" id="sqCount"></div>
@@ -802,7 +810,13 @@ document.getElementById('tagCloud').addEventListener('click', function(e) {
 
 document.getElementById('projectCloud').addEventListener('click', function(e) {
   var item = e.target.closest('.tag-item');
-  if (item) { switchTab('search'); document.getElementById('sqQuery').value = item.dataset.project; runSearch(1); }
+  if (item) {
+    // Structured project filter (not a text search for the project name).
+    switchTab('search');
+    document.getElementById('sqQuery').value = '';
+    document.getElementById('sqProject').value = item.dataset.project;
+    runSearch(1);
+  }
 });
 
 // Tab switching
@@ -831,11 +845,16 @@ async function loadSearchFilters() {
     var stats = await fetchJSON('/api/stats');
     var catSel = document.getElementById('sqCategory');
     var srcSel = document.getElementById('sqSource');
+    var projSel = document.getElementById('sqProject');
     Object.keys(stats.categories || {}).sort().forEach(function(c) {
       var o = document.createElement('option'); o.value = c; o.textContent = c + ' (' + stats.categories[c] + ')'; catSel.appendChild(o);
     });
     Object.keys(stats.sources || {}).sort().forEach(function(s) {
       var o = document.createElement('option'); o.value = s; o.textContent = s + ' (' + stats.sources[s] + ')'; srcSel.appendChild(o);
+    });
+    // Populate the project dropdown from stats.projects (sorted by count desc).
+    Object.entries(stats.projects || {}).sort(function(a,b){return b[1]-a[1];}).forEach(function(p) {
+      var o = document.createElement('option'); o.value = p[0]; o.textContent = p[0] + ' (' + p[1] + ')'; projSel.appendChild(o);
     });
     catSel.dataset.loaded = 'true';
   } catch(e) { console.warn('loadSearchFilters:', e); }
@@ -847,28 +866,47 @@ async function runSearch(page) {
   var phase = document.getElementById('sqPhase').value;
   var category = document.getElementById('sqCategory').value;
   var source = document.getElementById('sqSource').value;
+  var project = document.getElementById('sqProject').value;
+  var timeRange = document.getElementById('sqTimeRange').value;
   var list = document.getElementById('sqResults');
+
+  // Compute the "from" date for the selected time range (server-side filtering).
+  var fromParam = '';
+  if (timeRange) {
+    var days = parseInt(timeRange, 10);
+    var from = new Date(Date.now() - days * 86400000);
+    fromParam = from.toISOString().slice(0, 10);
+  }
 
   list.innerHTML = '<div class="empty-state">Searching...</div>';
 
   try {
     var data;
     if (query) {
+      // Full-text search with all filters pushed to the server (FTS + SQL WHERE).
       var url = '/api/search?q=' + encodeURIComponent(query);
       if (phase) url += '&phase=' + phase;
+      if (project) url += '&project=' + encodeURIComponent(project);
+      if (category) url += '&category=' + encodeURIComponent(category);
+      if (source) url += '&source=' + encodeURIComponent(source);
+      if (fromParam) url += '&from=' + fromParam;
       data = await fetchJSON(url);
-      var mems = data.results || [];
-      if (phase) mems = mems.filter(function(m) { return m.phase === phase; });
-      if (category) mems = mems.filter(function(m) { return m.category === category; });
-      if (source) mems = mems.filter(function(m) { return m.source === source; });
-      renderSearchResults(mems, query);
+      renderSearchResults(data.results || [], query);
     } else {
+      // No keyword: list with structural filters.
       var url = '/api/memories?limit=1000';
       if (phase) url += '&phase=' + phase;
-      if (category) url += '&category=' + category;
-      if (source) url += '&source=' + source;
+      if (project) url += '&project=' + encodeURIComponent(project);
+      if (category) url += '&category=' + encodeURIComponent(category);
+      if (source) url += '&source=' + encodeURIComponent(source);
       data = await fetchJSON(url);
-      renderSearchResults(data.memories || []);
+      var mems = data.memories || [];
+      // Time filtering for the list path (handleMemories doesn't accept from/to yet).
+      if (fromParam) {
+        var fromMs = new Date(fromParam).getTime();
+        mems = mems.filter(function(m) { return new Date(m.created_at).getTime() >= fromMs; });
+      }
+      renderSearchResults(mems);
     }
   } catch(e) {
     list.innerHTML = '<div class="empty-state">Search failed: ' + esc(e.message) + '</div>';

@@ -163,6 +163,26 @@ func (srv *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	if v := q.Get("phase"); v != "" {
 		opts.Phase = store.Phase(v)
 	}
+	if v := q.Get("project"); v != "" {
+		opts.Project = v
+	}
+	if v := q.Get("session"); v != "" {
+		opts.SessionID = v
+	}
+	if v := q.Get("category"); v != "" {
+		opts.Category = store.Category(v)
+	}
+	if v := q.Get("from"); v != "" {
+		if t, err := time.Parse("2006-01-02", v); err == nil {
+			opts.From = &t
+		}
+	}
+	if v := q.Get("to"); v != "" {
+		if t, err := time.Parse("2006-01-02", v); err == nil {
+			end := t.Add(24*time.Hour - time.Second) // inclusive end-of-day
+			opts.To = &end
+		}
+	}
 
 	results, err := srv.store.impl.Search(opts)
 	if err != nil {
@@ -173,6 +193,82 @@ func (srv *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"results": results,
 		"count":   len(results),
+	})
+}
+
+// handleTimeline returns memory counts grouped by day (and optionally by project), supporting
+// time+space dimension queries. Accepts project, phase, from, to query params.
+// This powers the "memories over time, per project" view that the growth chart alone can't do
+// (it shows only a global cumulative line).
+func (srv *Server) handleTimeline(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	opts := store.ListOptions{}
+	if v := q.Get("project"); v != "" {
+		opts.Project = v
+	}
+	if v := q.Get("phase"); v != "" {
+		opts.Phase = store.Phase(v)
+	}
+	if v := q.Get("from"); v != "" {
+		if t, err := time.Parse("2006-01-02", v); err == nil {
+			opts.CreatedAfter = &t
+		}
+	}
+	if v := q.Get("to"); v != "" {
+		if t, err := time.Parse("2006-01-02", v); err == nil {
+			end := t.Add(24*time.Hour - time.Second)
+			opts.CreatedBefore = &end
+		}
+	}
+
+	all, err := srv.store.impl.List(opts)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	// Group by day (date string) — and also track per-project counts for the space dimension.
+	type dayBucket struct {
+		Date     string         `json:"date"`
+		Count    int            `json:"count"`
+		Projects map[string]int `json:"projects,omitempty"`
+	}
+	buckets := make(map[string]*dayBucket)
+	var dateOrder []string
+	for _, m := range all {
+		day := m.CreatedAt.Format("2006-01-02")
+		b, ok := buckets[day]
+		if !ok {
+			b = &dayBucket{Date: day, Projects: make(map[string]int)}
+			buckets[day] = b
+			dateOrder = append(dateOrder, day)
+		}
+		b.Count++
+		if m.Project != "" {
+			b.Projects[m.Project]++
+		}
+	}
+
+	// Sort by date ascending for a chronological timeline.
+	sort.Slice(dateOrder, func(i, j int) bool { return dateOrder[i] < dateOrder[j] })
+	days := make([]*dayBucket, 0, len(dateOrder))
+	for _, d := range dateOrder {
+		days = append(days, buckets[d])
+	}
+
+	// Top-level project totals across the whole range (space-dimension summary).
+	projectTotals := make(map[string]int)
+	for _, m := range all {
+		if m.Project != "" {
+			projectTotals[m.Project]++
+		}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"days":      days,
+		"total":     len(all),
+		"projects":  projectTotals,
+		"day_count": len(days),
 	})
 }
 

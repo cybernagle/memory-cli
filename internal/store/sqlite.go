@@ -492,16 +492,48 @@ func (s *SqliteStore) Search(opts SearchOptions) ([]*Memory, error) {
 		})
 	}
 
-	// Try FTS5 first
-	rows, err := s.db.Query(`
+	// Try FTS5 first, with space/time filters pushed into SQL (not post-fetch Go filtering).
+	// Building the WHERE dynamically so each set filter is a real indexed predicate.
+	query := `
 		SELECT m.id, m.content, m.content_hash, m.phase, m.category, m.scope, m.source,
 		       m.session_id, m.created_at, m.updated_at, m.expires_at, m.access_count, m.version, m.processed_by, m.project, m.consumed_mask,
 		       m.message_uuid, m.parent_uuid, m.role, m.git_branch, m.model, m.prompt_id
 		FROM memories m
 		WHERE m.id IN (
 			SELECT memory_id FROM memories_fts WHERE memories_fts MATCH ?
-		)
-		ORDER BY m.created_at DESC`, opts.Query)
+		)`
+	args := []interface{}{opts.Query}
+	if opts.Phase != "" {
+		query += " AND m.phase = ?"
+		args = append(args, string(opts.Phase))
+	}
+	if opts.Scope != "" {
+		query += " AND m.scope = ?"
+		args = append(args, opts.Scope)
+	}
+	if opts.Project != "" {
+		query += " AND m.project = ?"
+		args = append(args, opts.Project)
+	}
+	if opts.SessionID != "" {
+		query += " AND m.session_id = ?"
+		args = append(args, opts.SessionID)
+	}
+	if opts.Category != "" {
+		query += " AND m.category = ?"
+		args = append(args, string(opts.Category))
+	}
+	if opts.From != nil {
+		query += " AND m.created_at >= ?"
+		args = append(args, opts.From.Format(time.RFC3339))
+	}
+	if opts.To != nil {
+		query += " AND m.created_at <= ?"
+		args = append(args, opts.To.Format(time.RFC3339))
+	}
+	query += " ORDER BY m.created_at DESC"
+
+	rows, err := s.db.Query(query, args...)
 	if err != nil {
 		// FTS failed, fall back to LIKE
 		return s.searchLike(opts)
@@ -559,15 +591,11 @@ func (s *SqliteStore) searchLike(opts SearchOptions) ([]*Memory, error) {
 }
 
 func (s *SqliteStore) filterSearch(memories []*Memory, opts SearchOptions) []*Memory {
+	// Tags require a join on the tags table, so they're still filtered post-fetch.
+	// Time/project/session/category/phase/scope filters are pushed into SQL in Search().
 	var results []*Memory
 	for _, mem := range memories {
 		if len(opts.Tags) > 0 && !hasAllTags(mem.Tags, opts.Tags) {
-			continue
-		}
-		if opts.From != nil && mem.CreatedAt.Before(*opts.From) {
-			continue
-		}
-		if opts.To != nil && mem.CreatedAt.After(*opts.To) {
 			continue
 		}
 		results = append(results, mem)
