@@ -30,12 +30,18 @@ const (
 	CategorySkills      Category = "skills"
 	CategoryInbox       Category = "inbox"
 	CategoryReminders   Category = "reminders"
+	// CategoryCapture holds raw user-message captures pushed by makro hooks (the timeline
+	// source material). Distinct from inbox (processing queue) and knowledge (refined facts).
+	CategoryCapture Category = "capture"
+	// CategoryProposals holds brain-generated proposals with a status state machine in metadata.
+	CategoryProposals Category = "proposals"
 )
 
 var AllCategories = []Category{
 	CategorySoul, CategoryCharacter, CategoryPeople, CategoryProject,
 	CategoryDate, CategoryKnowledge, CategoryFeedback, CategoryPreferences,
 	CategoryDecisions, CategoryLessons, CategoryHabits, CategorySkills,
+	CategoryCapture, CategoryProposals,
 }
 
 type Memory struct {
@@ -68,6 +74,10 @@ type Memory struct {
 	GitBranch   string `yaml:"git_branch,omitempty" json:"git_branch,omitempty"`     // active git branch from the transcript
 	Model       string `yaml:"model,omitempty" json:"model,omitempty"`               // model that produced an assistant turn
 	PromptID    string `yaml:"prompt_id,omitempty" json:"prompt_id,omitempty"`       // groups all messages in one user prompt turn
+
+	// Metadata is a free-form JSON store for extensible per-memory data: proposal status,
+	// profile evidence, accept/reject history. Persisted only by SqliteStore (FileStore ignores it).
+	Metadata map[string]any `yaml:"-" json:"metadata,omitempty"`
 }
 
 // NormalizeCategory strips wiki-link brackets, lowercases, and maps known aliases to standard categories.

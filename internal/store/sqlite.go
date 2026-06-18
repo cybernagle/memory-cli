@@ -85,6 +85,10 @@ func (s *SqliteStore) init() error {
 	s.db.Exec("CREATE INDEX IF NOT EXISTS idx_memories_prompt ON memories(prompt_id)")
 	s.db.Exec("CREATE INDEX IF NOT EXISTS idx_memories_parent_uuid ON memories(parent_uuid)")
 
+	// metadata column: free-form JSON for proposal status, profile evidence, etc.
+	// SQLite-only (FileStore does not persist this). Default '{}' so existing rows are valid.
+	s.db.Exec("ALTER TABLE memories ADD COLUMN metadata TEXT NOT NULL DEFAULT '{}'")
+
 	// Backfill the append-only raw_entries from existing memories and link them.
 	// Idempotent: INSERT OR IGNORE dedups by content_hash (PK); the UPDATE is a no-op once raw_entry_id is set.
 	// This guarantees every memory — including those written before raw capture existed — has a permanent source.
@@ -203,7 +207,7 @@ func (s *SqliteStore) Delete(id string) error {
 }
 
 func (s *SqliteStore) List(opts ListOptions) ([]*Memory, error) {
-	query := "SELECT id, content, content_hash, phase, category, scope, source, session_id, created_at, updated_at, expires_at, access_count, version, processed_by, project, consumed_mask, message_uuid, parent_uuid, role, git_branch, model, prompt_id FROM memories WHERE 1=1"
+	query := "SELECT id, content, content_hash, phase, category, scope, source, session_id, created_at, updated_at, expires_at, access_count, version, processed_by, project, consumed_mask, message_uuid, parent_uuid, role, git_branch, model, prompt_id, metadata FROM memories WHERE 1=1"
 	var args []any
 
 	if opts.Category != "" {
@@ -402,7 +406,7 @@ func (s *SqliteStore) ListUnconsumed(processorName string) ([]*Memory, error) {
 	rows, err := s.db.Query(`
 		SELECT id, content, content_hash, phase, category, scope, source, session_id,
 		       created_at, updated_at, expires_at, access_count, version, processed_by, project, consumed_mask,
-		       message_uuid, parent_uuid, role, git_branch, model, prompt_id
+		       message_uuid, parent_uuid, role, git_branch, model, prompt_id, metadata
 		FROM memories
 		WHERE phase = 'inbox' AND (consumed_mask & ?) = 0
 		ORDER BY created_at ASC`,
@@ -446,7 +450,7 @@ func (s *SqliteStore) ListUnconsumed(processorName string) ([]*Memory, error) {
 
 func (s *SqliteStore) FindByID(id string) (*Memory, error) {
 	row := s.db.QueryRow(
-		"SELECT id, content, content_hash, phase, category, scope, source, session_id, created_at, updated_at, expires_at, access_count, version, processed_by, project, consumed_mask, message_uuid, parent_uuid, role, git_branch, model, prompt_id FROM memories WHERE id = ?",
+		"SELECT id, content, content_hash, phase, category, scope, source, session_id, created_at, updated_at, expires_at, access_count, version, processed_by, project, consumed_mask, message_uuid, parent_uuid, role, git_branch, model, prompt_id, metadata FROM memories WHERE id = ?",
 		id)
 	mem, err := scanMemoryRowSingle(row)
 	if err != nil {
@@ -470,7 +474,7 @@ func (s *SqliteStore) FindByID(id string) (*Memory, error) {
 
 func (s *SqliteStore) FindByHash(hash string) (*Memory, error) {
 	row := s.db.QueryRow(
-		"SELECT id, content, content_hash, phase, category, scope, source, session_id, created_at, updated_at, expires_at, access_count, version, processed_by, project, consumed_mask, message_uuid, parent_uuid, role, git_branch, model, prompt_id FROM memories WHERE content_hash = ?",
+		"SELECT id, content, content_hash, phase, category, scope, source, session_id, created_at, updated_at, expires_at, access_count, version, processed_by, project, consumed_mask, message_uuid, parent_uuid, role, git_branch, model, prompt_id, metadata FROM memories WHERE content_hash = ?",
 		hash)
 	mem, err := scanMemoryRowSingle(row)
 	if err != nil {
@@ -501,7 +505,7 @@ func (s *SqliteStore) Search(opts SearchOptions) ([]*Memory, error) {
 	query := `
 		SELECT m.id, m.content, m.content_hash, m.phase, m.category, m.scope, m.source,
 		       m.session_id, m.created_at, m.updated_at, m.expires_at, m.access_count, m.version, m.processed_by, m.project, m.consumed_mask,
-		       m.message_uuid, m.parent_uuid, m.role, m.git_branch, m.model, m.prompt_id
+		       m.message_uuid, m.parent_uuid, m.role, m.git_branch, m.model, m.prompt_id, m.metadata
 		FROM memories m
 		WHERE m.id IN (
 			SELECT memory_id FROM memories_fts WHERE memories_fts MATCH ?
@@ -657,7 +661,7 @@ func (s *SqliteStore) GetBacklinks(id string) ([]*Memory, error) {
 	rows, err := s.db.Query(`
 		SELECT m.id, m.content, m.content_hash, m.phase, m.category, m.scope, m.source,
 		       m.session_id, m.created_at, m.updated_at, m.expires_at, m.access_count, m.version, m.processed_by, m.project, m.consumed_mask,
-		       m.message_uuid, m.parent_uuid, m.role, m.git_branch, m.model, m.prompt_id
+		       m.message_uuid, m.parent_uuid, m.role, m.git_branch, m.model, m.prompt_id, m.metadata
 		FROM links l
 		JOIN memories m ON m.id = l.source_id
 		WHERE l.target_id = ?`, id)
@@ -867,13 +871,13 @@ func (s *SqliteStore) InsertMemory(mem *Memory) error {
 	}
 	// No existing memory (or query error) → fall through to a fresh INSERT.
 
-	_, err = tx.Exec(`INSERT INTO memories (id, content, content_hash, phase, category, scope, source, session_id, created_at, updated_at, expires_at, access_count, version, processed_by, raw_entry_id, project, consumed_mask, message_uuid, parent_uuid, role, git_branch, model, prompt_id)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+	_, err = tx.Exec(`INSERT INTO memories (id, content, content_hash, phase, category, scope, source, session_id, created_at, updated_at, expires_at, access_count, version, processed_by, raw_entry_id, project, consumed_mask, message_uuid, parent_uuid, role, git_branch, model, prompt_id, metadata)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		mem.ID, mem.Content, mem.ContentHash, string(mem.Phase), string(categoryVal),
 		mem.Scope, mem.Source, mem.SessionID,
 		mem.CreatedAt.Format(time.RFC3339), mem.UpdatedAt.Format(time.RFC3339),
 		formatTime(mem.ExpiresAt), mem.AccessCount, mem.Version, string(pbData), rawHash, mem.Project, mem.ConsumedMask,
-		mem.MessageUUID, mem.ParentUUID, mem.Role, mem.GitBranch, mem.Model, mem.PromptID)
+		mem.MessageUUID, mem.ParentUUID, mem.Role, mem.GitBranch, mem.Model, mem.PromptID, metadataJSON(mem.Metadata))
 	if err != nil {
 		tx.Rollback()
 		return err
@@ -1017,9 +1021,10 @@ func scanMemoryRow(rows *sql.Rows) (*Memory, error) {
 	var createdAt, updatedAt string
 	var expiresAt sql.NullString
 	var processedBy string
+	var metadataStr string
 	err := rows.Scan(&mem.ID, &mem.Content, &mem.ContentHash, &phase, &category,
 		&scope, &source, &sessionID, &createdAt, &updatedAt, &expiresAt, &mem.AccessCount, &mem.Version, &processedBy, &project, &mem.ConsumedMask,
-		&mem.MessageUUID, &mem.ParentUUID, &mem.Role, &mem.GitBranch, &mem.Model, &mem.PromptID)
+		&mem.MessageUUID, &mem.ParentUUID, &mem.Role, &mem.GitBranch, &mem.Model, &mem.PromptID, &metadataStr)
 	if err != nil {
 		return nil, err
 	}
@@ -1040,6 +1045,9 @@ func scanMemoryRow(rows *sql.Rows) (*Memory, error) {
 	json.Unmarshal([]byte(processedBy), &mem.ProcessedBy)
 	if mem.ProcessedBy == nil {
 		mem.ProcessedBy = []string{}
+	}
+	if metadataStr != "" && metadataStr != "{}" {
+		json.Unmarshal([]byte(metadataStr), &mem.Metadata)
 	}
 	return &mem, nil
 }
@@ -1050,9 +1058,10 @@ func scanMemoryRowSingle(row *sql.Row) (*Memory, error) {
 	var createdAt, updatedAt string
 	var expiresAt sql.NullString
 	var processedBy string
+	var metadataStr string
 	err := row.Scan(&mem.ID, &mem.Content, &mem.ContentHash, &phase, &category,
 		&scope, &source, &sessionID, &createdAt, &updatedAt, &expiresAt, &mem.AccessCount, &mem.Version, &processedBy, &project, &mem.ConsumedMask,
-		&mem.MessageUUID, &mem.ParentUUID, &mem.Role, &mem.GitBranch, &mem.Model, &mem.PromptID)
+		&mem.MessageUUID, &mem.ParentUUID, &mem.Role, &mem.GitBranch, &mem.Model, &mem.PromptID, &metadataStr)
 	if err != nil {
 		return nil, err
 	}
@@ -1073,6 +1082,9 @@ func scanMemoryRowSingle(row *sql.Row) (*Memory, error) {
 	json.Unmarshal([]byte(processedBy), &mem.ProcessedBy)
 	if mem.ProcessedBy == nil {
 		mem.ProcessedBy = []string{}
+	}
+	if metadataStr != "" && metadataStr != "{}" {
+		json.Unmarshal([]byte(metadataStr), &mem.Metadata)
 	}
 	return &mem, nil
 }
@@ -1101,4 +1113,18 @@ func (s *SqliteStore) IngestMemory(mem *Memory) error {
 		mem.Version = 1
 	}
 	return s.InsertMemory(mem)
+}
+
+
+// metadataJSON serializes a Memory's Metadata map to a JSON string for storage.
+// Returns "{}" for nil/empty maps so the column is always valid JSON.
+func metadataJSON(m map[string]any) string {
+	if len(m) == 0 {
+		return "{}"
+	}
+	b, err := json.Marshal(m)
+	if err != nil {
+		return "{}"
+	}
+	return string(b)
 }
