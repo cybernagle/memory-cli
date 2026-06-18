@@ -193,7 +193,33 @@ func (c *Client) Extract(ctx context.Context, req ExtractRequest) ([]ExtractedMe
 	jsonStr := repairJSON(extractJSON(result.text))
 	var rawItems []map[string]json.RawMessage
 	if err := json.Unmarshal([]byte(jsonStr), &rawItems); err != nil {
-		return nil, fmt.Errorf("parse llm response: %w\nraw: %s", err, truncateRaw(result.text))
+		// GLM sometimes wraps the array in an object: {"answer":[...]}, {"memories":[...]}.
+		// Try to unwrap: parse as a single object and take the first array-valued field.
+		var wrapper map[string]json.RawMessage
+		if wErr := json.Unmarshal([]byte(jsonStr), &wrapper); wErr == nil {
+			for _, v := range wrapper {
+				// Case 1: inner is an array of objects → use directly.
+				var inner []map[string]json.RawMessage
+				if json.Unmarshal(v, &inner) == nil {
+					rawItems = inner
+					break
+				}
+				// Case 2: inner is an array of strings ({"answer":["fact1","fact2"]}) → wrap
+				// each string as a content-only ExtractedMemory.
+				var strArr []string
+				if json.Unmarshal(v, &strArr) == nil {
+					for _, s := range strArr {
+						rawItems = append(rawItems, map[string]json.RawMessage{
+							"content": json.RawMessage(`"` + strings.ReplaceAll(s, `"`, `\"`) + `"`),
+						})
+					}
+					break
+				}
+			}
+		}
+		if rawItems == nil {
+			return nil, fmt.Errorf("parse llm response: %w\nraw: %s", err, truncateRaw(result.text))
+		}
 	}
 	var memories []ExtractedMemory
 	for _, item := range rawItems {

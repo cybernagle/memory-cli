@@ -189,7 +189,7 @@ func runProcess(cmd *cobra.Command, args []string) error {
 		if len(m.Categories) > 0 {
 			organized.Category = store.Category(strings.Trim(m.Categories[0], "[]"))
 		}
-		if err := s.InsertMemory(organized); err != nil {
+		if err := s.IngestMemory(organized); err != nil {
 			fmt.Fprintf(os.Stderr, "write organized: %v\n", err)
 			continue
 		}
