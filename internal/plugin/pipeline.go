@@ -27,50 +27,43 @@ func NewPipelineEngine(registry *Registry, store store.Store, router DataItemRou
 	}
 }
 
-// Run reads unprocessed inbox, routes to processors, writes results via components.
+// Run reads inbox items not yet consumed by each processor, processes them, and marks consumption.
 func (e *PipelineEngine) Run(ctx context.Context, tracker *processor.StatusTracker) (*PipelineResult, error) {
-	memories, err := e.store.List(store.ListOptions{Phase: store.PhaseInbox})
-	if err != nil {
-		return nil, fmt.Errorf("list inbox: %w", err)
-	}
-	if len(memories) == 0 {
-		return &PipelineResult{Skipped: true, Reason: "no inbox memories"}, nil
-	}
-
-	log.Printf("[pipeline] starting: %d inbox memories", len(memories))
-
-	if tracker != nil {
-		tracker.Update(func(st *processor.ProcessStatus) {
-			st.Progress.TotalInbox = len(memories)
-			st.Phase = "extracting"
-			st.Message = fmt.Sprintf("Processing %d inbox memories", len(memories))
-		})
-		tracker.Emit(processor.EventFromStatus("status"))
-	}
-
-	items := make([]InboxItem, len(memories))
-	for i, m := range memories {
-		items[i] = InboxItem{
-			ID:        m.ID,
-			Content:   m.Content,
-			SessionID: m.SessionID,
-			Source:    m.Source,
-			Tags:      m.Tags,
-			CreatedAt: m.CreatedAt,
-		}
-	}
-
-	// Build ComponentResolver from all registered components
+	totalResult := &PipelineResult{}
 	resolver := NewCompositeResolver(e.registry.AllComponents())
 
-	totalResult := &PipelineResult{}
 	for _, proc := range e.registry.AllProcessors() {
+		memories, err := e.store.ListUnconsumed(proc.Name())
+		if err != nil {
+			return nil, fmt.Errorf("list unconsumed for %s: %w", proc.Name(), err)
+		}
+		if len(memories) == 0 {
+			continue
+		}
+
+		log.Printf("[pipeline] processor %s: %d unconsumed inbox memories", proc.Name(), len(memories))
+
 		if tracker != nil {
 			tracker.Update(func(st *processor.ProcessStatus) {
+				st.Progress.TotalInbox = len(memories)
 				st.Phase = "extracting"
-				st.Message = fmt.Sprintf("Running processor: %s", proc.Name())
+				st.Message = fmt.Sprintf("Processor %s: %d items", proc.Name(), len(memories))
 			})
 			tracker.Emit(processor.EventFromStatus("status"))
+		}
+
+		items := make([]InboxItem, len(memories))
+		for i, m := range memories {
+			items[i] = InboxItem{
+				ID:        m.ID,
+				Content:   m.Content,
+				SessionID: m.SessionID,
+				Project:   m.Project,
+				PromptID:  m.PromptID,
+				Source:    m.Source,
+				Tags:      m.Tags,
+				CreatedAt: m.CreatedAt,
+			}
 		}
 
 		input := ProcessInput{
@@ -90,7 +83,7 @@ func (e *PipelineEngine) Run(ctx context.Context, tracker *processor.StatusTrack
 
 		if tracker != nil {
 			tracker.Update(func(st *processor.ProcessStatus) {
-				st.Phase = "merging"
+				st.Phase = "writing"
 				st.Message = fmt.Sprintf("Writing %d results from %s", len(output.Results), proc.Name())
 				st.Progress.Layer1Input = len(items)
 				st.Progress.Layer1Output = len(output.Results)
@@ -108,8 +101,8 @@ func (e *PipelineEngine) Run(ctx context.Context, tracker *processor.StatusTrack
 		}
 
 		for _, id := range output.SourceIDs {
-			if err := e.store.MarkProcessed(id); err != nil {
-				log.Printf("[pipeline] mark processed %s: %v", id, err)
+			if err := e.store.MarkConsumed(id, proc.Name()); err != nil {
+				log.Printf("[pipeline] mark consumed %s for %s: %v", id, proc.Name(), err)
 			} else {
 				totalResult.Processed++
 			}
@@ -118,7 +111,11 @@ func (e *PipelineEngine) Run(ctx context.Context, tracker *processor.StatusTrack
 		totalResult.ProcessorsRun++
 	}
 
-	log.Printf("[pipeline] done: %d organized, %d processed, %d errors",
+	if totalResult.ProcessorsRun == 0 {
+		return &PipelineResult{Skipped: true, Reason: "no unconsumed inbox memories"}, nil
+	}
+
+	log.Printf("[pipeline] done: %d organized, %d consumed, %d errors",
 		totalResult.Organized, totalResult.Processed, totalResult.Errors)
 	return totalResult, nil
 }

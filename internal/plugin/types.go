@@ -28,6 +28,8 @@ type InboxItem struct {
 	ID        string
 	Content   string
 	SessionID string
+	Project   string
+	PromptID  string // groups messages from one user-prompt turn (context signal)
 	Source    string
 	Tags      []string
 	CreatedAt time.Time

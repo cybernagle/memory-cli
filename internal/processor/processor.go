@@ -212,7 +212,7 @@ func (p *Processor) flushBatch(ctx context.Context, extracted []llm.ExtractedMem
 			ID:          uuid.New().String(),
 			Content:     m.Content,
 			ContentHash: store.HashContent(m.Content),
-			Phase:       store.PhaseOrganized,
+			Phase:       store.PhaseProcessed,
 			Category:    cat,
 			Scope:       "global",
 			Tags:        tags,
@@ -323,7 +323,7 @@ type Result struct {
 	Layer2Input     int    `json:"layer2_input"`
 	Layer2Output    int    `json:"layer2_output"`
 	Organized       int    `json:"organized"`
-	Processed int    `json:"processed"`
+	Processed       int    `json:"processed"`
 	Errors          int    `json:"errors"`
 }
 
@@ -339,6 +339,13 @@ func groupBySession(mems []*store.Memory) map[string][]*store.Memory {
 	}
 	for _, m := range withSession {
 		groups[m.SessionID] = append(groups[m.SessionID], m)
+	}
+	// Within each session, sort by (prompt_id, created_at) so messages from the same
+	// conversation turn — a user prompt and the assistant's reply share a prompt_id —
+	// land adjacent. The extractor then sees the full Q&A context together, yielding
+	// denser, more accurate memories than scattering related messages across chunks.
+	for sid := range groups {
+		groups[sid] = sortSessionMemByPrompt(groups[sid])
 	}
 	if len(withoutSession) > 0 {
 		sort.Slice(withoutSession, func(i, j int) bool {
@@ -356,6 +363,33 @@ func groupBySession(mems []*store.Memory) map[string][]*store.Memory {
 		}
 	}
 	return groups
+}
+
+// sortSessionMemByPrompt orders a session's memories so same-prompt_id items are contiguous,
+// chronologically ordered within the prompt. See factprocessor.sortSessionByPrompt for rationale.
+func sortSessionMemByPrompt(mems []*store.Memory) []*store.Memory {
+	if len(mems) <= 1 {
+		return mems
+	}
+	order := make([]string, 0, len(mems))
+	buckets := make(map[string][]*store.Memory)
+	for _, m := range mems {
+		if _, ok := buckets[m.PromptID]; !ok {
+			order = append(order, m.PromptID)
+		}
+		buckets[m.PromptID] = append(buckets[m.PromptID], m)
+	}
+	for k := range buckets {
+		b := buckets[k]
+		sort.SliceStable(b, func(i, j int) bool {
+			return b[i].CreatedAt.Before(b[j].CreatedAt)
+		})
+	}
+	var out []*store.Memory
+	for _, k := range order {
+		out = append(out, buckets[k]...)
+	}
+	return out
 }
 
 func extractCategories(content string) []string {

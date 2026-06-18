@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"os/signal"
@@ -96,10 +97,13 @@ var serveCmd = &cobra.Command{
 		d := daemon.New(s, interval, decayThreshold, cfg.Daemon.UpgradeAccess, notifier)
 		var pipelineReg *plugin.Registry
 
-		// Wire LLM processor if ANTHROPIC_API_KEY is available
+		// Wire LLM processor if an API key is available (MEMORY_LLM_API_KEY / legacy ANTHROPIC_*).
+		// A single GLM-4.5-Flash client serves extraction, consolidation, and enrichment.
 		if llmClient, err := llm.NewClient(llm.Config{}); err == nil {
 			if sqliteStore, ok := s.(*store.SqliteStore); ok {
+				fmt.Printf("LLM ready: model=%s base=%s\n", llmClient.Model(), llmClient.BaseURL())
 				d.AddTask(&daemon.ConsolidateLLMTask{Store: sqliteStore, LLM: llmClient})
+				d.AddTask(&daemon.EnrichTagsTask{Store: sqliteStore, LLM: llmClient})
 
 				// Use plugin pipeline if enabled, otherwise legacy processor
 				if cfg.Pipeline.Enabled {
@@ -119,6 +123,10 @@ var serveCmd = &cobra.Command{
 						}
 
 						router := func(ctx context.Context, item plugin.DataItem) error {
+							if item.Confidence < 0.5 {
+								log.Printf("[pipeline] discarding low confidence (%.2f): %.80s", item.Confidence, item.Data["content"])
+								return nil
+							}
 							mem := factprocessor.NewMemoryFromDataItem(item)
 							return s.IngestMemory(mem)
 						}
@@ -189,7 +197,7 @@ var serveCmd = &cobra.Command{
 			dbPath = config.SQLiteDefaultPath()
 		}
 		apiSrv := api.NewServer(s, dbPath, cfg.API.Keys)
-			apiSrv.SetRegistry(pipelineReg)
+		apiSrv.SetRegistry(pipelineReg)
 		apiAddr := "127.0.0.1:8765"
 		go func() {
 			fmt.Printf("Memory REST API listening on %s\n", apiAddr)

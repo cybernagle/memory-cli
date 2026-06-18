@@ -37,7 +37,9 @@ func memoryToInboxItem(m *store.Memory) InboxItem {
 	return InboxItem{
 		ID:        m.ID,
 		Content:   m.Content,
-		SessionID: m.Source,
+		SessionID: m.SessionID,
+		Project:   m.Project,
+		PromptID:  m.PromptID,
 		Source:    m.Source,
 		Tags:      m.Tags,
 		CreatedAt: createdAt,

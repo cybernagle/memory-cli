@@ -17,10 +17,12 @@ import (
 )
 
 const (
-	defaultBatchSize = 50
+	maxContentChars    = 30000 // max total chars per LLM call
+	maxContentsPerCall = 20    // max items per LLM call
+	maxSessionsPerTick = 10    // max sessions processed per Process() call
+	maxChunksPerTick   = 20    // max total LLM calls per tick
 )
 
-// FactProcessor implements plugin.Processor for fact extraction.
 type FactProcessor struct {
 	llm       *llm.Client
 	resolver  *entity.EntityResolver
@@ -31,7 +33,7 @@ func New(llmClient *llm.Client, entityComp *entity.EntityComponent) *FactProcess
 	return &FactProcessor{
 		llm:       llmClient,
 		resolver:  entity.NewResolver(entityComp),
-		batchSize: defaultBatchSize,
+		batchSize: 50,
 	}
 }
 
@@ -47,11 +49,6 @@ func (p *FactProcessor) Produces() []plugin.DataType {
 	return []plugin.DataType{plugin.DataEntity}
 }
 
-const (
-	maxContentChars   = 30000 // max total chars per LLM call
-	maxContentsPerCall = 20   // max items per LLM call
-)
-
 func (p *FactProcessor) Process(ctx context.Context, input plugin.ProcessInput) (*plugin.ProcessOutput, error) {
 	groups := groupBySession(input.Items)
 	if len(groups) == 0 {
@@ -59,21 +56,37 @@ func (p *FactProcessor) Process(ctx context.Context, input plugin.ProcessInput) 
 	}
 
 	result := &plugin.ProcessOutput{}
-	var allExtracted []llm.ExtractedMemory
 	var allSourceIDs []string
 
-	log.Printf("[fact-processor] %d sessions to process", len(groups))
+	log.Printf("[fact-processor] %d sessions to process (max %d sessions, %d chunks this tick)", len(groups), maxSessionsPerTick, maxChunksPerTick)
 
+	// Process limited sessions per tick for incremental progress
+	sessionCount := 0
+	chunkCount := 0
 	for sid, items := range groups {
+		if sessionCount >= maxSessionsPerTick || chunkCount >= maxChunksPerTick {
+			break
+		}
+		sessionCount++
 		var contents []string
 		for _, item := range items {
 			contents = append(contents, item.Content)
 			allSourceIDs = append(allSourceIDs, item.ID)
 		}
 
-		// Split large sessions into chunks respecting char and count limits
 		chunks := chunkContents(contents, maxContentsPerCall, maxContentChars)
 		log.Printf("[fact-processor] session %s: %d items → %d chunks", sid, len(contents), len(chunks))
+
+		// Limit chunks from this session to stay within budget
+		remaining := maxChunksPerTick - chunkCount
+		if remaining <= 0 {
+			break
+		}
+		if len(chunks) > remaining {
+			chunks = chunks[:remaining]
+			log.Printf("[fact-processor] trimming session %s to %d chunks (budget)", sid, remaining)
+		}
+
 		for ci, chunk := range chunks {
 			log.Printf("[fact-processor] extracting chunk %d/%d (session %s, %d items)...", ci+1, len(chunks), sid, len(chunk))
 			extracted, err := p.extract(ctx, chunk)
@@ -83,6 +96,7 @@ func (p *FactProcessor) Process(ctx context.Context, input plugin.ProcessInput) 
 				continue
 			}
 			log.Printf("[fact-processor] extracted %d memories from chunk %d", len(extracted), ci+1)
+			chunkCount++
 
 			if len(extracted) > len(chunk) {
 				trimTo := len(chunk) - 1
@@ -92,48 +106,39 @@ func (p *FactProcessor) Process(ctx context.Context, input plugin.ProcessInput) 
 				extracted = extracted[:trimTo]
 			}
 
-			allExtracted = append(allExtracted, extracted...)
-		}
-	}
+			for _, m := range extracted {
+				cat := "knowledge"
+				if len(m.Categories) > 0 {
+					cat = m.Categories[0]
+				} else if categories := extractCategories(m.Content); len(categories) > 0 {
+					cat = categories[0]
+				}
+				tags := m.Tags
+				if len(tags) == 0 {
+					tags = m.Categories
+				}
 
-	// Merge layer
-	if len(allExtracted) > 0 {
-		merged, err := p.merge(ctx, allExtracted)
-		if err != nil {
-			return nil, fmt.Errorf("merge: %w", err)
-		}
-		if len(merged) > len(allExtracted) {
-			merged = merged[:len(allExtracted)]
-		}
+				// Generate the memory ID now so entity mentions are linked to the right memory.
+				// The same id is threaded through the DataItem so NewMemoryFromDataItem reuses it.
+				memID := uuid.New().String()
+				if p.resolver != nil {
+					p.resolver.ResolveMentions(ctx, m.Content, memID)
+				}
 
-		for _, m := range merged {
-			categories := extractCategories(m.Content)
-			cat := "knowledge"
-			if len(categories) > 0 {
-				cat = categories[0]
+				result.Results = append(result.Results, plugin.DataItem{
+					DataType:  plugin.DataEntity,
+					Operation: "create",
+					Data: map[string]interface{}{
+						"id":         memID,
+						"content":    m.Content,
+						"category":   cat,
+						"tags":       tags,
+						"confidence": m.Confidence,
+						"created_at": time.Now().Format(time.RFC3339),
+					},
+					Confidence: m.Confidence,
+				})
 			}
-			tags := m.Tags
-			if len(tags) == 0 {
-				tags = m.Categories
-			}
-
-			// Resolve [[wiki-links]] into entities
-			if p.resolver != nil {
-				p.resolver.ResolveMentions(ctx, m.Content, "")
-			}
-
-			result.Results = append(result.Results, plugin.DataItem{
-				DataType:  plugin.DataEntity,
-				Operation: "create",
-				Data: map[string]interface{}{
-					"content":    m.Content,
-					"category":   cat,
-					"tags":       tags,
-					"confidence": m.Confidence,
-					"created_at": time.Now().Format(time.RFC3339),
-				},
-				Confidence: m.Confidence,
-			})
 		}
 	}
 
@@ -165,45 +170,6 @@ func chunkContents(contents []string, maxCount, maxChars int) [][]string {
 	return chunks
 }
 
-func (p *FactProcessor) merge(ctx context.Context, extracted []llm.ExtractedMemory) ([]llm.MergedMemory, error) {
-	asMerged := make([]llm.MergedMemory, len(extracted))
-	for i, e := range extracted {
-		asMerged[i] = llm.MergedMemory{
-			Content:    e.Content,
-			Categories: e.Categories,
-			Tags:       e.Tags,
-			Confidence: e.Confidence,
-		}
-	}
-
-	if len(asMerged) <= defaultBatchSize {
-		return p.llm.Merge(ctx, llm.MergeRequest{Memories: asMerged})
-	}
-
-	var result []llm.MergedMemory
-	for i := 0; i < len(asMerged); i += defaultBatchSize {
-		end := i + defaultBatchSize
-		if end > len(asMerged) {
-			end = len(asMerged)
-		}
-		merged, err := p.llm.Merge(ctx, llm.MergeRequest{Memories: asMerged[i:end]})
-		if err != nil {
-			return nil, err
-		}
-		result = append(result, merged...)
-	}
-
-	if len(result) > defaultBatchSize {
-		merged, err := p.llm.Merge(ctx, llm.MergeRequest{Memories: result})
-		if err != nil {
-			return nil, err
-		}
-		result = merged
-	}
-
-	return result, nil
-}
-
 func groupBySession(items []plugin.InboxItem) map[string][]plugin.InboxItem {
 	groups := make(map[string][]plugin.InboxItem)
 	var withSession, withoutSession []plugin.InboxItem
@@ -216,6 +182,13 @@ func groupBySession(items []plugin.InboxItem) map[string][]plugin.InboxItem {
 	}
 	for _, item := range withSession {
 		groups[item.SessionID] = append(groups[item.SessionID], item)
+	}
+	// Within each session, sort by (prompt_id, created_at) so messages from the same
+	// conversation turn — a user prompt and the assistant's reply share a prompt_id —
+	// land adjacent. The extractor then sees the full Q&A context together, which yields
+	// denser, more accurate memories than scattering related messages across chunks.
+	for sid := range groups {
+		groups[sid] = sortSessionByPrompt(groups[sid])
 	}
 	if len(withoutSession) > 0 {
 		sort.Slice(withoutSession, func(i, j int) bool {
@@ -235,6 +208,37 @@ func groupBySession(items []plugin.InboxItem) map[string][]plugin.InboxItem {
 	return groups
 }
 
+// sortSessionByPrompt orders a session's items so same-prompt_id messages are contiguous,
+// ordered by created_at within the prompt. Items without a prompt_id keep time order but
+// are grouped together at the start of their natural slot. This is a stable, deterministic
+// reordering — it never drops or merges items.
+func sortSessionByPrompt(items []plugin.InboxItem) []plugin.InboxItem {
+	if len(items) <= 1 {
+		return items
+	}
+	// Bucket by prompt_id (empty bucket for items without one), preserving arrival order.
+	order := make([]string, 0, len(items))
+	buckets := make(map[string][]plugin.InboxItem)
+	for _, it := range items {
+		if _, ok := buckets[it.PromptID]; !ok {
+			order = append(order, it.PromptID)
+		}
+		buckets[it.PromptID] = append(buckets[it.PromptID], it)
+	}
+	// Sort each bucket by created_at so a turn's messages are in chronological order.
+	for k := range buckets {
+		b := buckets[k]
+		sort.SliceStable(b, func(i, j int) bool {
+			return b[i].CreatedAt.Before(b[j].CreatedAt)
+		})
+	}
+	var out []plugin.InboxItem
+	for _, k := range order {
+		out = append(out, buckets[k]...)
+	}
+	return out
+}
+
 func extractCategories(content string) []string {
 	links := store.ExtractWikiLinks(content)
 	var cats []string
@@ -251,6 +255,7 @@ func extractCategories(content string) []string {
 
 // NewMemoryFromDataItem creates a store.Memory from a DataItem.
 func NewMemoryFromDataItem(item plugin.DataItem) *store.Memory {
+	id, _ := item.Data["id"].(string)
 	content, _ := item.Data["content"].(string)
 	cat, _ := item.Data["category"].(string)
 	tagsRaw, _ := item.Data["tags"].([]string)
@@ -264,12 +269,16 @@ func NewMemoryFromDataItem(item plugin.DataItem) *store.Memory {
 
 	_ = confidence
 
+	if id == "" {
+		id = uuid.New().String()
+	}
+
 	return &store.Memory{
-		ID:          uuid.New().String(),
+		ID:          id,
 		Content:     content,
 		ContentHash: store.HashContent(content),
-		Phase:       store.PhaseOrganized,
-		Category:    store.Category(cat),
+		Phase:       store.PhaseProcessed,
+		Category:    store.NormalizeCategory(store.Category(cat)),
 		Scope:       "global",
 		Tags:        tagsRaw,
 		Source:      "fact-processor",

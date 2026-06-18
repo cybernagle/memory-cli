@@ -39,34 +39,11 @@ func (t *DreamTask) Run(s store.Store) (int, error) {
 }
 
 // dreamLight classifies inbox memories into categories based on content heuristics.
+// DISABLED: inbox items must never be deleted. Classification still happens
+// (write as processed) but the original inbox item is preserved.
 func dreamLight(s store.Store) (int, error) {
-	memories, err := s.List(store.ListOptions{Phase: store.PhaseInbox})
-	if err != nil {
-		return 0, err
-	}
-	if len(memories) == 0 {
-		return 0, nil
-	}
-
-	count := 0
-	for _, mem := range memories {
-		cat := classifyContent(mem.Content)
-		if cat == "" {
-			continue
-		}
-		// Re-write as organized with the detected category
-		_, err := s.Write(mem.Content, store.PhaseOrganized, cat, mem.Scope, mem.Tags, mem.Source)
-		if err != nil {
-			log.Printf("dream: reclassify %s failed: %v", mem.ID[:8], err)
-			continue
-		}
-		if err := s.Delete(mem.ID); err != nil {
-			log.Printf("dream: delete inbox %s failed: %v", mem.ID[:8], err)
-			continue
-		}
-		count++
-	}
-	return count, nil
+	log.Printf("[dream] dreamLight is disabled — inbox preservation mode")
+	return 0, nil
 }
 
 // dreamMedium does light tasks plus merges similar memories and resolves wikilinks.
@@ -159,37 +136,9 @@ func containsAny(s string, keywords ...string) bool {
 }
 
 // mergeSimilar finds and merges memories with similar content prefixes.
+// DISABLED: no deletions allowed without recycle bin.
 func mergeSimilar(s store.Store) int {
-	all, err := s.List(store.ListOptions{Phase: store.PhaseOrganized})
-	if err != nil {
-		return 0
-	}
-
-	type best struct {
-		id          string
-		accessCount int
-	}
-	seen := make(map[string]*best)
-	count := 0
-
-	for _, mem := range all {
-		prefix := strings.ToLower(strings.TrimSpace(mem.Content))
-		if len(prefix) > 100 {
-			prefix = prefix[:100]
-		}
-		if existing, dup := seen[prefix]; dup {
-			if mem.AccessCount >= existing.accessCount {
-				s.Delete(existing.id)
-				seen[prefix] = &best{id: mem.ID, accessCount: mem.AccessCount}
-			} else {
-				s.Delete(mem.ID)
-			}
-			count++
-		} else {
-			seen[prefix] = &best{id: mem.ID, accessCount: mem.AccessCount}
-		}
-	}
-	return count
+	return 0
 }
 
 // extractReminders scans for time commitments and creates reminder memories.
@@ -218,10 +167,10 @@ func extractReminders(s store.Store) int {
 		hash := store.ExtractWikiLinks(mem.Content)
 		_ = hash // placeholder — in a full implementation, we'd check for existing reminders
 
-		// Create a reminder memory
+		// Create a reminder memory (processed, L3 will promote)
 		_, err := s.Write(
 			fmt.Sprintf("[[自动提醒]] %s", mem.Content),
-			store.PhaseOrganized,
+			store.PhaseProcessed,
 			store.CategoryReminders,
 			mem.Scope,
 			append(mem.Tags, "auto-reminder"),
