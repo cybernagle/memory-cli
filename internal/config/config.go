@@ -67,6 +67,15 @@ type Config struct {
 	Notification NotificationConfig `yaml:"notification"`
 	API          APIConfig          `yaml:"api"`
 	Pipeline     PipelineConfig     `yaml:"pipeline"`
+	Search       SearchConfig       `yaml:"search"`
+}
+
+// SearchConfig controls which search/ranking strategy the store uses.
+// "idf" (default): custom IDF + CJK prefix matching + first-keyword boost (tuned for Chinese).
+// "bm25": FTS5 built-in BM25 ranking (better for English/segmented text).
+// "hybrid": BM25 + vector embedding fusion (future, not yet implemented).
+type SearchConfig struct {
+	Strategy string `yaml:"strategy"`
 }
 
 func DefaultConfig() *Config {
@@ -84,6 +93,9 @@ func DefaultConfig() *Config {
 		Notification: NotificationConfig{
 			Enabled: true,
 			Method:  "osascript",
+		},
+		Search: SearchConfig{
+			Strategy: "idf",
 		},
 	}
 }

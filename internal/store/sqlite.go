@@ -16,7 +16,8 @@ import (
 )
 
 type SqliteStore struct {
-	db *sql.DB
+	db             *sql.DB
+	searchStrategy string // "idf"(default) | "bm25" | "hybrid"
 }
 
 func (s *SqliteStore) DB() *sql.DB { return s.db }
@@ -40,7 +41,17 @@ func NewSqliteStoreFromConfig(cfg *config.Config) (*SqliteStore, error) {
 	if dbPath == "" {
 		dbPath = config.SQLiteDefaultPath()
 	}
-	return NewSqliteStore(dbPath)
+	s, err := NewSqliteStore(dbPath)
+	if err != nil {
+		return nil, err
+	}
+	// Apply search strategy from config ("idf" default, "bm25", "hybrid").
+	if cfg.Search.Strategy != "" {
+		s.searchStrategy = cfg.Search.Strategy
+	} else {
+		s.searchStrategy = "idf"
+	}
+	return s, nil
 }
 
 func (s *SqliteStore) Init() error { return s.init() }
@@ -540,7 +551,18 @@ func (s *SqliteStore) Search(opts SearchOptions) ([]*Memory, error) {
 		query += " AND m.created_at <= ?"
 		args = append(args, opts.To.Format(time.RFC3339))
 	}
-	query += " ORDER BY m.created_at DESC"
+	// Strategy-dependent ranking. BM25 strategy uses FTS5's built-in bm25() relevance
+	// scoring in the FTS subquery; IDF strategy (default) orders by created_at (relevance
+	// for the inbox path is handled by SearchLike's IDF ranking). The subquery structure
+	// stays the same — only the inner ORDER BY changes.
+	if s.searchStrategy == "bm25" {
+		query = strings.Replace(query,
+			"SELECT memory_id FROM memories_fts WHERE memories_fts MATCH ?",
+			"SELECT memory_id FROM memories_fts WHERE memories_fts MATCH ? ORDER BY bm25(memories_fts)", 1)
+		// No outer ORDER BY — preserve the BM25 relevance order from the subquery.
+	} else {
+		query += " ORDER BY m.created_at DESC"
+	}
 
 	rows, err := s.db.Query(query, args...)
 	if err != nil {
