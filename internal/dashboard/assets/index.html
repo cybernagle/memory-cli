@@ -313,6 +313,8 @@ a:hover { text-decoration: underline; }
   padding: 2px 10px; border-radius: 4px; cursor: pointer; font-size: 11px;
 }
 .context-clear:hover { border-color: #e55; color: #e55; }
+.deep-search-toggle { font-size: 11px; color: var(--text2); display: flex; align-items: center; gap: 3px; cursor: pointer; margin-left: auto; }
+.deep-search-toggle input { accent-color: var(--primary); }
 .chat-typing { color: var(--text2); font-size: 13px; padding: 4px 0; }
 .growth-chart-container {
   background: var(--surface); border: 1px solid var(--border);
@@ -513,6 +515,9 @@ a:hover { text-decoration: underline; }
         <input type="range" id="contextBudget" min="2000" max="40000" step="2000" value="20000" class="context-slider" />
         <span class="context-budget" id="contextBudgetLabel">20k</span>
         <button class="context-clear" id="contextClear" title="Clear conversation history">Clear</button>
+        <label class="deep-search-toggle" title="启用多轮深度搜索（较慢）">
+          <input type="checkbox" id="deepSearchToggle" /> 深度搜索
+        </label>
       </div>
       <div class="chat-input-row">
         <input type="text" id="chatInput" placeholder="Ask about your memories..." />
@@ -1408,7 +1413,54 @@ async function sendChat() {
   var budget = parseInt(document.getElementById('contextBudget').value) || 20000;
   var history = getHistoryForAPI();
 
+  // Default: fast mode via /api/ask (single search + single LLM call — fast, reliable).
+  // Agent mode (multi-round search) is opt-in via the "deep search" checkbox.
+  var useAgent = document.getElementById('deepSearchToggle') && document.getElementById('deepSearchToggle').checked;
+
   try {
+    if (!useAgent) {
+      // ── Fast path: /api/ask (single round, no SSE) ──
+      var loadingText = document.getElementById(agentId + '-loading-text');
+      if (loadingText) loadingText.textContent = '正在搜索记忆并回答...';
+
+      var resp = await fetch('/api/ask', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ question: question })
+      });
+      var data = await resp.json();
+
+      // Remove loading, render answer.
+      var loadingEl = document.getElementById(agentId + '-loading');
+      if (loadingEl) loadingEl.remove();
+
+      var answerEl = document.getElementById(agentId + '-answer');
+      var answer = data.answer || 'No response';
+      if (typeof marked !== 'undefined') {
+        answerEl.innerHTML = marked.parse(answer);
+      } else {
+        answerEl.textContent = answer;
+      }
+
+      // Show sources if available.
+      if (data.sources && data.sources.length > 0) {
+        var srcHtml = '<details class="chat-sources"><summary>' + data.sources.length + ' memory sources</summary>';
+        data.sources.forEach(function(s) {
+          srcHtml += '<div class="chat-source-item"><strong>[' + esc(s.category || '') + ']</strong> ' + esc((s.content||'').slice(0,120)) + '</div>';
+        });
+        srcHtml += '</details>';
+        document.getElementById(agentId + '-sources').innerHTML = srcHtml;
+      }
+
+      chatHistory.push({ role: 'assistant', content: answer });
+      updateContextDisplay();
+      chatLoading = false;
+      document.getElementById('chatSend').disabled = false;
+      msgs.scrollTop = msgs.scrollHeight;
+      return;
+    }
+
+    // ── Deep path: /api/ask/agent (multi-round, SSE) ──
     var resp = await fetch('/api/ask/agent', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
