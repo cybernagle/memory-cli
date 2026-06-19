@@ -585,8 +585,8 @@ func (s *SqliteStore) Search(opts SearchOptions) ([]*Memory, error) {
 
 func (s *SqliteStore) searchLike(opts SearchOptions) ([]*Memory, error) {
 	// Split the query on OR (LLM keyword extraction produces "keyword1 OR keyword2").
-	// Each keyword is matched as a case-insensitive substring. A memory matching ANY keyword
-	// is included — the caller (LLM synthesis) ranks by relevance.
+	// Rank memories by how many keywords they match — a memory matching 3 keywords (e.g.
+	// "瑞福莱" + "暖通" + "服务") is far more relevant than one matching just "上海".
 	keywordStr := strings.ToLower(opts.Query)
 	keywordStr = strings.ReplaceAll(keywordStr, " or ", "|")
 	keywords := strings.Split(keywordStr, "|")
@@ -598,22 +598,33 @@ func (s *SqliteStore) searchLike(opts SearchOptions) ([]*Memory, error) {
 	if err != nil {
 		return nil, err
 	}
-	var results []*Memory
+
+	type scored struct {
+		mem   *Memory
+		score int
+	}
+	var results []scored
 	for _, mem := range memories {
 		contentLower := strings.ToLower(mem.Content)
-		matched := false
+		score := 0
 		for _, kw := range keywords {
 			if kw != "" && strings.Contains(contentLower, kw) {
-				matched = true
-				break
+				score++
 			}
 		}
-		if matched {
-			results = append(results, mem)
+		if score > 0 {
+			results = append(results, scored{mem: mem, score: score})
 		}
 	}
-	results = s.filterSearch(results, opts)
-	return results, nil
+	// Sort by score descending (most keyword matches first).
+	sort.Slice(results, func(i, j int) bool { return results[i].score > results[j].score })
+
+	out := make([]*Memory, len(results))
+	for i, r := range results {
+		out[i] = r.mem
+	}
+	out = s.filterSearch(out, opts)
+	return out, nil
 }
 
 func (s *SqliteStore) filterSearch(memories []*Memory, opts SearchOptions) []*Memory {
