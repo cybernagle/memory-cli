@@ -22,6 +22,7 @@ type Store interface {
 	Search(opts store.SearchOptions) ([]*store.Memory, error)
 	FindByID(id string) (*store.Memory, error)
 	GetBacklinks(id string) ([]*store.Memory, error)
+	SearchLike(opts store.SearchOptions) ([]*store.Memory, error)
 }
 
 type storeWrapper struct {
@@ -626,13 +627,11 @@ func (srv *Server) handleAsk(w http.ResponseWriter, r *http.Request) {
 	if len(processed) > procLimit {
 		processed = processed[:procLimit]
 	}
-	// For inbox, pick items spread across different dates (not all from one day) so the LLM
-	// sees the full time span. Sort ASCENDING (oldest first) — for "when did I do X" questions,
-	// the earliest date (project start) is the most important to surface.
-	sort.Slice(inbox, func(i, j int) bool {
-		return inbox[i].CreatedAt.Before(inbox[j].CreatedAt)
-	})
-	inbox = spreadByDate(inbox, inboxLimit)
+	// Inbox: take IDF-ranked top N directly. Do NOT re-sort or spreadByDate — that would
+	// destroy the IDF ranking and let common-keyword matches crowd out rare entities.
+	if len(inbox) > inboxLimit {
+		inbox = inbox[:inboxLimit]
+	}
 	results = append(results, processed...)
 	results = append(results, inbox...)
 

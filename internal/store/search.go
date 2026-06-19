@@ -17,6 +17,10 @@ type SearchOptions struct {
 	To       *time.Time
 }
 
+func (s *FileStore) SearchLike(opts SearchOptions) ([]*Memory, error) {
+	return s.Search(opts)
+}
+
 func (s *FileStore) Search(opts SearchOptions) ([]*Memory, error) {
 	all, err := s.List(ListOptions{Phase: opts.Phase, Scope: opts.Scope, Project: opts.Project, SessionID: opts.SessionID, Category: opts.Category})
 	if err != nil {
