@@ -6,6 +6,7 @@
 <title>Memory Dashboard</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
 <script src="https://cdn.jsdelivr.net/npm/marked@12/marked.min.js"></script>
+<script>if (typeof marked !== 'undefined') { marked.setOptions({ breaks: false, gfm: true }); }</script>
 <style>
 :root {
   --bg: #0f1117;
@@ -228,7 +229,7 @@ a:hover { text-decoration: underline; }
 .chat-msg.assistant { align-self: flex-start; }
 .chat-bubble {
   padding: 12px 16px; border-radius: 12px; font-size: 14px;
-  line-height: 1.6; white-space: pre-wrap; word-break: break-word;
+  line-height: 1.6; word-break: break-word;
 }
 .chat-msg.user .chat-bubble {
   background: var(--primary2); color: #fff;
@@ -267,16 +268,13 @@ a:hover { text-decoration: underline; }
 .agent-answer pre code { background: none; padding: 0; }
 .agent-answer strong { color: var(--text); font-weight: 600; }
 .agent-answer h1, .agent-answer h2, .agent-answer h3 { margin: 12px 0 6px; font-size: 15px; }
-/* Loading indicator */
-.agent-loading { font-size: 13px; color: var(--text2); padding: 8px 0; display: flex; align-items: center; gap: 6px; }
-.loading-dots { display: inline-block; width: 16px; }
-.loading-dots::after {
-  content: '...'; animation: loadingPulse 1.2s infinite;
+/* Loading indicator — animated spinner so the user knows the agent is working */
+.agent-loading { font-size: 13px; color: var(--text2); padding: 10px 0; display: flex; align-items: center; gap: 8px; }
+.agent-loading .spinner {
+  width: 14px; height: 14px; border: 2px solid var(--border); border-top-color: var(--primary);
+  border-radius: 50%; animation: spin 0.8s linear infinite;
 }
-@keyframes loadingPulse {
-  0%, 100% { opacity: 0.3; }
-  50% { opacity: 1; }
-}
+@keyframes spin { to { transform: rotate(360deg); } }
 .chat-input-area {
   display: flex; flex-direction: column; gap: 8px; padding-top: 12px;
   border-top: 1px solid var(--border); margin-top: 8px;
@@ -1399,7 +1397,7 @@ async function sendChat() {
     '<div class="chat-bubble">' +
       '<div class="agent-steps" id="' + agentId + '-steps"></div>' +
       '<div class="agent-loading" id="' + agentId + '-loading">' +
-        '<span class="loading-dots"></span> 正在搜索记忆...' +
+        '<span class="spinner"></span> <span id="' + agentId + '-loading-text">正在思考...</span>' +
       '</div>' +
       '<div class="agent-answer" id="' + agentId + '-answer"></div>' +
     '</div>' +
@@ -1471,9 +1469,12 @@ async function sendChat() {
 function renderAgentStep(agentId, step) {
   var stepsEl = document.getElementById(agentId + '-steps');
   if (!stepsEl) return;
-  // Hide the initial loading indicator once the first step arrives.
-  var loadingEl = document.getElementById(agentId + '-loading');
-  if (loadingEl) loadingEl.remove();
+  // Update loading text to reflect current activity (don't remove yet — remove on final).
+  var loadingText = document.getElementById(agentId + '-loading-text');
+  if (loadingText) {
+    var phaseText = { thinking: '正在思考...', searching: '正在搜索记忆...', observing: '正在分析结果...', answering: '正在组织回答...' };
+    loadingText.textContent = phaseText[step.type] || '处理中...';
+  }
   var html = '';
   switch(step.type) {
     case 'thinking':
@@ -1527,7 +1528,12 @@ function appendChatMsg(role, text) {
 
 document.getElementById('chatSend').addEventListener('click', sendChat);
 document.getElementById('chatInput').addEventListener('keydown', function(e) {
-  if (e.key === 'Enter') sendChat();
+  // Enter to send, but NOT during IME composition (Chinese/Japanese input — the Enter
+  // that confirms a character candidate must not trigger send).
+  if (e.key === 'Enter' && !e.isComposing && !e.shiftKey) {
+    e.preventDefault();
+    sendChat();
+  }
 });
 
 // Context controls
