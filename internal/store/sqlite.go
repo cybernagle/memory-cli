@@ -637,9 +637,35 @@ func (s *SqliteStore) SearchLike(opts SearchOptions) ([]*Memory, error) {
 		contentLower := strings.ToLower(mem.Content)
 		score := 0.0
 		for _, kw := range keywords {
-			if kw != "" && kwWeight[kw] > 0 && strings.Contains(contentLower, kw) {
-				score += kwWeight[kw]
+			if kw == "" || kwWeight[kw] == 0 {
+				continue
 			}
+			if strings.Contains(contentLower, kw) {
+				score += kwWeight[kw]
+				continue
+			}
+			// Keyword as a whole doesn't match (e.g. "瑞福莱暖通设备（上海）有限公司" is 13
+			// chars but content only has "瑞福莱"). Try progressively shorter CJK prefixes.
+			runes := []rune(kw)
+			matched := false
+			for n := len(runes) - 1; n >= 2; n-- {
+				sub := string(runes[:n])
+				if strings.Contains(contentLower, sub) {
+					// Use the prefix's own IDF (recompute for this shorter substring).
+					var subCnt int
+					s.db.QueryRow("SELECT COUNT(*) FROM memories WHERE lower(content) LIKE ?", "%"+sub+"%").Scan(&subCnt)
+					if subCnt > 0 {
+						w := math.Log(float64(totalDocs) / float64(subCnt))
+						if w < 0.1 {
+							w = 0.1
+						}
+						score += w
+					}
+					matched = true
+					break
+				}
+			}
+			_ = matched
 		}
 		if score > 0 {
 			results = append(results, scored{mem: mem, score: score})

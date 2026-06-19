@@ -470,6 +470,25 @@ func (c *Client) Chat(ctx context.Context, prompt string) (string, error) {
 	return c.ChatWithTokens(ctx, prompt, 1024)
 }
 
+// ChatWithModel calls the LLM with a specific model override (e.g. "glm-4.7-flash" for
+// keyword extraction where the default Flash model is too weak). Reuses the same key/baseURL.
+func (c *Client) ChatWithModel(ctx context.Context, model, prompt string, maxTokens int) (string, error) {
+	if maxTokens <= 0 {
+		maxTokens = 2048
+	}
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	start := time.Now()
+	result, err := c.chatWithModel(ctx, model, prompt, maxTokens, false)
+	recordLLMCall("ChatWithModel", model, prompt, fmt.Sprintf("maxTokens=%d", maxTokens),
+		result, err, time.Since(start))
+	if err != nil {
+		return "", fmt.Errorf("llm chat: %w", err)
+	}
+	return result.text, nil
+}
+
 func (c *Client) ChatWithTokens(ctx context.Context, prompt string, maxTokens int) (string, error) {
 	if maxTokens <= 0 {
 		maxTokens = 2048

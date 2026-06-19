@@ -74,12 +74,18 @@ type chatResult struct {
 // token accounting. When jsonMode is true, the request carries response_format json_object
 // so callers (Extract/Merge/ConceptTags) can json.Unmarshal the output directly.
 func (c *Client) chat(ctx context.Context, prompt string, maxTokens int, jsonMode bool) (*chatResult, error) {
+	return c.chatWithModel(ctx, c.model, prompt, maxTokens, jsonMode)
+}
+
+// chatWithModel is the underlying call with an explicit model override. Used by
+// ChatWithModel for tasks that benefit from a stronger model (e.g. keyword extraction).
+func (c *Client) chatWithModel(ctx context.Context, model, prompt string, maxTokens int, jsonMode bool) (*chatResult, error) {
 	if maxTokens <= 0 {
 		maxTokens = 2048
 	}
 
 	reqBody := openaiChatRequest{
-		Model: c.model,
+		Model: model,
 		Messages: []openaiMessage{
 			{Role: "user", Content: prompt},
 		},

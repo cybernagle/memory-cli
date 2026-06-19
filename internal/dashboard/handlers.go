@@ -635,6 +635,32 @@ func (srv *Server) handleAsk(w http.ResponseWriter, r *http.Request) {
 	results = append(results, processed...)
 	results = append(results, inbox...)
 
+	// Fallback: if current question found 0 results but there's conversation history,
+	// re-search using the PREVIOUS user question's keywords. This handles follow-ups like
+	// "具体的细节以及日期提供给我" which on their own extract generic keywords ("细节 OR 日期"),
+	// but in context are asking about the prior topic (e.g. "瑞福莱的合同").
+	if len(results) == 0 && len(req.History) > 0 && srv.llm != nil {
+		for i := len(req.History) - 1; i >= 0; i-- {
+			if req.History[i].Role == "user" {
+				prevQ := req.History[i].Content
+				if kw, err := llmExtractKeywords(r.Context(), srv.llm, prevQ); err == nil && kw != "" {
+					// Re-run all three phase searches with previous keywords.
+					results, _ = srv.store.impl.Search(store.SearchOptions{Query: kw, Phase: store.PhaseOrganized})
+					proc2, _ := srv.store.impl.Search(store.SearchOptions{Query: kw, Phase: store.PhaseProcessed})
+					inb2, _ := srv.store.impl.SearchLike(store.SearchOptions{Query: kw, Phase: store.PhaseInbox})
+					if len(inb2) > inboxLimit {
+						inb2 = inb2[:inboxLimit]
+					}
+					results = append(results, proc2...)
+					results = append(results, inb2...)
+					// Update searchQuery for snippet extraction.
+					searchQuery = kw
+				}
+				break
+			}
+		}
+	}
+
 	if len(results) == 0 {
 		writeJSON(w, http.StatusOK, map[string]any{
 			"answer":   "No relevant memories found for your question.",
@@ -847,7 +873,7 @@ Keywords:`, question)
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 
-	resp, err := c.ChatWithTokens(ctx, prompt, 100)
+	resp, err := c.ChatWithModel(ctx, "glm-4.7-flash", prompt, 100)
 	if err != nil {
 		return "", err
 	}
