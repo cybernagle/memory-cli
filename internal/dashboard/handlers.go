@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cybernagle/memory-cli/internal/llm"
 	"github.com/cybernagle/memory-cli/internal/store"
 )
 
@@ -563,8 +564,16 @@ func (srv *Server) handleAsk(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Extract search keywords from the combined question + context.
-	searchQuery := extractSearchKeywords(searchInput)
+	// Extract search keywords via LLM. This replaces the brittle regex+stopword approach:
+	// the old extractSearchKeywords couldn't handle arbitrary Chinese questions because FTS5's
+	// unicode61 tokenizer has no CJK segmentation. The LLM understands any phrasing and returns
+	// clean keywords that FTS OR LIKE can match. Falls back to the raw question if LLM is down.
+	searchQuery := searchInput
+	if srv.llm != nil {
+		if kw, err := llmExtractKeywords(r.Context(), srv.llm, searchInput); err == nil && kw != "" {
+			searchQuery = kw
+		}
+	}
 
 	// Search for relevant memories across organized + processed phases.
 	results, err := srv.store.impl.Search(store.SearchOptions{
@@ -770,6 +779,42 @@ func spreadByDate(mems []*store.Memory, n int) []*store.Memory {
 //   - Join with spaces → FTS implicit AND across tokens.
 //
 // If we end up with nothing usable, fall back to the raw question (let LIKE handle it).
+
+// llmExtractKeywords asks the LLM to extract 2-5 search keywords from a natural-language
+// question. This handles arbitrary Chinese/English phrasing that regex-based extraction
+// can't — the LLM understands semantics and returns clean tokens.
+func llmExtractKeywords(ctx context.Context, c *llm.Client, question string) (string, error) {
+	prompt := fmt.Sprintf(`Extract 2-5 search keywords from this question for a full-text search engine.
+Rules:
+- Output the KEYWORDS ONLY, space-separated, no explanation
+- Keep proper nouns intact (juli, RSA, GLM, makro)
+- For Chinese, output individual meaningful words (企业, 客户, 部署), not whole phrases
+- Remove question words (什么, 怎么, 吗, 呢, 的, 是, 还记得, 有没有)
+- Mix English and Chinese as appropriate to the question
+
+Question: %s
+
+Keywords:`, question)
+
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+
+	resp, err := c.ChatWithTokens(ctx, prompt, 100)
+	if err != nil {
+		return "", err
+	}
+	resp = strings.TrimSpace(resp)
+	if idx := strings.IndexByte(resp, '\n'); idx > 0 {
+		resp = resp[:idx]
+	}
+	resp = strings.Trim(resp, "`\"'.,")
+	fields := strings.Fields(resp)
+	if len(fields) == 0 {
+		return "", fmt.Errorf("empty keywords")
+	}
+	return strings.Join(fields, " OR "), nil
+}
+
 func extractSearchKeywords(question string) string {
 	var tokens []string
 

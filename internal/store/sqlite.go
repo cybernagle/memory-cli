@@ -560,7 +560,9 @@ func (s *SqliteStore) Search(opts SearchOptions) ([]*Memory, error) {
 	}
 
 	if len(ids) == 0 {
-		return nil, nil
+		// FTS returned 0 matches — likely a Chinese query that unicode61 can't tokenize.
+		// Fall back to LIKE (substring match), which handles CJK reliably.
+		return s.searchLike(opts)
 	}
 
 	tagMap, _ := s.batchLoadTags(ids)
@@ -582,17 +584,33 @@ func (s *SqliteStore) Search(opts SearchOptions) ([]*Memory, error) {
 }
 
 func (s *SqliteStore) searchLike(opts SearchOptions) ([]*Memory, error) {
-	queryLower := strings.ToLower(opts.Query)
+	// Split the query on OR (LLM keyword extraction produces "keyword1 OR keyword2").
+	// Each keyword is matched as a case-insensitive substring. A memory matching ANY keyword
+	// is included — the caller (LLM synthesis) ranks by relevance.
+	keywordStr := strings.ToLower(opts.Query)
+	keywordStr = strings.ReplaceAll(keywordStr, " or ", "|")
+	keywords := strings.Split(keywordStr, "|")
+	for i, k := range keywords {
+		keywords[i] = strings.TrimSpace(k)
+	}
+
 	memories, err := s.List(ListOptions{Phase: opts.Phase, Scope: opts.Scope})
 	if err != nil {
 		return nil, err
 	}
 	var results []*Memory
 	for _, mem := range memories {
-		if !strings.Contains(strings.ToLower(mem.Content), queryLower) {
-			continue
+		contentLower := strings.ToLower(mem.Content)
+		matched := false
+		for _, kw := range keywords {
+			if kw != "" && strings.Contains(contentLower, kw) {
+				matched = true
+				break
+			}
 		}
-		results = append(results, mem)
+		if matched {
+			results = append(results, mem)
+		}
 	}
 	results = s.filterSearch(results, opts)
 	return results, nil
