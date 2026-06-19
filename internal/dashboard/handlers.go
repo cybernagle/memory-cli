@@ -581,21 +581,13 @@ func (srv *Server) handleAsk(w http.ResponseWriter, r *http.Request) {
 	// organized/processed as supplements. This prevents a case where organized returns
 	// generic matches (e.g. "上海" matching 200 unrelated memories) while the real answer
 	// (e.g. "瑞福莱" only in inbox) gets crowded out.
-	// inbox uses LIKE search directly (not FTS) — FTS OR on generic keywords like "上海"
-	// returns hundreds of irrelevant matches, crowding out the real hits. LIKE ranks by
-	// keyword hit count so "瑞福莱"(rare) beats "上海"(common) in relevance.
-	var inbox []*store.Memory
-	if sqlStore, ok := srv.store.impl.(*store.SqliteStore); ok {
-		inbox, _ = sqlStore.SearchLike(store.SearchOptions{
-			Query: searchQuery,
-			Phase: store.PhaseInbox,
-		})
-	} else {
-		inbox, _ = srv.store.impl.Search(store.SearchOptions{
-			Query: searchQuery,
-			Phase: store.PhaseInbox,
-		})
-	}
+	// inbox uses SearchLike (IDF-ranked LIKE) — FTS OR on generic keywords like "上海"
+	// returns hundreds of irrelevant matches. The Store interface now declares SearchLike,
+	// so this works for both SqliteStore (real IDF ranking) and FileStore (fallback to Search).
+	inbox, _ := srv.store.impl.SearchLike(store.SearchOptions{
+		Query: searchQuery,
+		Phase: store.PhaseInbox,
+	})
 
 	// Search organized + processed as supplements.
 	results, err := srv.store.impl.Search(store.SearchOptions{
