@@ -113,6 +113,10 @@ var serveCmd = &cobra.Command{
 				d.AddTask(&daemon.ConsolidateLLMTask{Store: sqliteStore, LLM: llmClient})
 				d.AddTask(&daemon.EnrichTagsTask{Store: sqliteStore, LLM: llmClient})
 				d.AddTask(&daemon.ProfileTask{Store: sqliteStore, LLM: llmClient})
+				// EvidenceTask (RECONCILE P3 #18): sediment per-domain accept/reject signal onto
+				// preference memories. Runs after ProfileTask — fine-grained counterpart to the
+				// global character profile it writes. Does not need the LLM.
+				d.AddTask(&daemon.EvidenceTask{Store: sqliteStore})
 
 				// Use plugin pipeline if enabled, otherwise legacy processor
 				if cfg.Pipeline.Enabled {
@@ -206,10 +210,10 @@ var serveCmd = &cobra.Command{
 			dbPath = config.SQLiteDefaultPath()
 		}
 		apiSrv := api.NewServer(s, dbPath, cfg.API.Keys)
-			// Wire LLM client for narrative endpoints (/timeline) if available.
-			if llmClient, err := llm.NewClient(llm.Config{}); err == nil {
-				apiSrv.SetLLM(llmClient)
-			}
+		// Wire LLM client for narrative endpoints (/timeline) if available.
+		if llmClient, err := llm.NewClient(llm.Config{}); err == nil {
+			apiSrv.SetLLM(llmClient)
+		}
 		apiSrv.SetRegistry(pipelineReg)
 		apiAddr := "127.0.0.1:8765"
 		go func() {

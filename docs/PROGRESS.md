@@ -1,8 +1,8 @@
 # Memory-CLI 进度落盘
 
-> 最近更新：2026-06-19 01:30
+> 最近更新：2026-06-20 00:45
 > 当前分支：main
-> 最新 commit：`7419920` profile + timeline
+> 最新 commit：`647cdf2` + 未提交的 P3 #18（EvidenceTask）
 
 ---
 
@@ -16,7 +16,75 @@ memory-cli 正在支撑一个"个人第二大脑"系统（memory-cli = 记忆，
 
 ---
 
+## goal 完成度盘点（2026-06-20）
+
+memory-cli 的 goal = 兑现 RECONCILE.md 契约里所有 `[M]`（memory-cli 侧）改动。
+
+| 优先级 | 项 | Commit | 状态 |
+|---|---|---|---|
+| P0 #1 | POST /memories 全字段 + metadata 列 | `1f90138` | ✅ |
+| P0 #2 | GET /memories tags=/from= 参数 | `1f90138` | ✅ |
+| P0 #3 | :8765 auth 修复 | `1f90138` | ✅ |
+| P0 #4 | CategoryCapture/CategoryProposals 常量 | `1f90138` | ✅ |
+| P1 #7 | PATCH /memories/{id} metadata 状态机 | `1f90138` | ✅ |
+| P1 #11 | character 重定义 + ProfileTask | `7419920` | ✅ |
+| P2 #12 | 叙事时间线 /api/timeline | `7419920` | ✅ |
+| **P3 #18** | preferences/habits 加 evidence 字段 | 本次 | ✅ |
+
+**memory-cli 侧契约 = 全部完成（8/8）。** 第一周验收 #1（P0 通）达标。
+
+makro 侧（`~/Desktop/Code/Makro/internal/brain/`，已核对）：
+
+| `[K]` 项 | 对应文件 | 状态 |
+|---|---|---|
+| #6 memory_client.go | `memory_client.go`（548 行，对齐 `:8765`，明确标注 "NOT :8090"） | ✅ 已实现 |
+| #5 capture sink | `capture.go`（339 行）+ `NewCaptureSink` | ✅ 已实现 |
+| #8 brain/reader/propose | `brain.go`/`reader.go`/`propose.go` | ✅ 已实现 |
+| #9 inbox | `inbox.go`（244 行） | ✅ 已实现 |
+| #10 feedback | `feedback.go`（122 行） | ✅ 已实现 |
+| 接入主流程 | `main.go` + `cmd/gui/chat_service.go` 都 `brain.NewBrain(...)` + `go brain.Run()` | ✅ 已接入 |
+
+**结论：闭环两侧的代码都已落地**——memory-cli 的 `[M]` 契约全完成，makro 的 `[K]` brain 模块全实现且对齐 `:8765`。**剩余的是联调验证**（第一周验收 #2/#3：08:00 推送 → accept/reject → 状态一致），需要两侧同时跑起来观察真实数据流。
+
+---
+
 ## 已完成（按时间倒序）
+
+### 2026-06-20 · P3 #18 EvidenceTask（契约最后一项）
+
+| 文件 | 说明 |
+|---|---|
+| `internal/daemon/evidence.go` | EvidenceTask — 按 domain 聚合 verdict 沉淀到 per-topic preferences 记忆 |
+| `internal/daemon/evidence_test.go` | 分桶 + accept_rate 计算 + 幂等测试 |
+| `internal/cmd/serve.go` | 注册 EvidenceTask（ProfileTask 之后） |
+
+ProfileTask 写**全局**画像（一条 character 记忆）；EvidenceTask 写**per-domain** 的拟合信号（"topic: Debugging — accept_rate 0.5"）。两者互补：
+- 扫 proposals（status 非 pending）+ feedback（有 verdict）
+- 按 domain 分桶，每桶算 accept_rate / verdict_count
+- 用 `source=evidence-task, metadata.topic=<domain>` 做幂等 upsert（`metadata LIKE` 查找，proposal 量小无需索引）
+- pending proposals 和无 verdict 的旧 feedback 被跳过（无拟合信号）
+- 通过 `UpdateMemoryMetadata` 原子合并，重跑幂等
+
+**测试**：`TestEvidenceTaskBucketsByDomainAndComputesRate`（Debugging 0.5 / Languages 1.0）+ `TestEvidenceTaskIsIdempotent`（重跑不建新行）✅
+
+### 2026-06-19 晚 ~ 06-20 · 中文搜索可靠性攻坚（13 commits，契约之外的体验轴）
+
+这批工作**不在 RECONCILE 契约里**，是另一个需求轴：让用户能直接向 memory 提问。围绕一个核心 bug——中文实体搜索（"瑞福莱暖通设备"）一直返回"没找到"。
+
+| 层次 | 问题 | 解法 | Commit |
+|---|---|---|---|
+| 分词 | FTS5 unicode61 不切中文，整句当 1 个 token | LLM 抽关键词（glm-4.7-flash）+ `ChatWithModel` 按调用覆写模型 | `8bc2fbd` `647cdf2` |
+| 召回 | FTS 默认 AND 太严，OR 又被"上海"噪声淹没 | LIKE + **IDF 加权**排序（稀有实体浮顶），`SearchLike` 出 Store 接口 | `cd9337d` `2b41fdc` |
+| 摘要 | "瑞福莱"出现在第 500 字符，300 字窗口看不到 | 关键词居中 snippet（窗口以首个命中为中心） | `cd9337d` |
+| 上下文 | 追问"具体的细节"返回 0 结果 | 回退到上一轮用户问题重抽关键词重搜 | `647cdf2` |
+| 长串 | 全称 13 字 vs 内容只有 3 字"瑞福莱" | CJK 渐进前缀匹配（12→2 字，每段重算 IDF） | `647cdf2` |
+| 日期 | LLM 回"6/19"（加工日期）而非事件日期 | 平衡 phase 采样（inbox 升序排）+ `DATE:` 前缀 + 时间窗 header | `5ceddb9` `f513348` `a97d1f0` |
+
+顺带做的 chat 面板 UX（dashboard）：
+- 默认走快速模式 `/api/ask`（单次搜索+单次 LLM，~5s），agent 改为可选"深度搜索" | `62e660f`
+- markdown 渲染、IME 回车、分阶段加载 spinner、追问历史 | `5d8d33d` `2fd2508` `27329d6`
+
+**验证**："瑞福莱暖通设备的服务记录" → 返回开票记录（之前"没找到"）；"RSA什么时候制作的" → 6/3→6/8（之前"6/19"）。
 
 ### 2026-06-19 · RECONCILE P0/P1/P2 契约改造
 
@@ -63,7 +131,7 @@ memory-cli 正在支撑一个"个人第二大脑"系统（memory-cli = 记忆，
 | `f11a246` | `memory process` 命令 + 上下文 Extract + provenance |
 | `6f74550` | FTS 搜索下推过滤 + project/time UI + timeline API |
 | `395d954` | zcode adapter + Extract JSON 解析加固 |
-| `ff59b78` | organized ID 空字符串修复 + JSON wrapper 解析 |
+| `ff59f78` | organized ID 空字符串修复 + JSON wrapper 解析 |
 | `b2dac6b` | 去掉 MarkProcessed（inbox phase 不改动） |
 | `fdc8e4b` | consumed_mask bitmask 追踪加工状态 |
 
@@ -105,7 +173,9 @@ memory-cli 正在支撑一个"个人第二大脑"系统（memory-cli = 记忆，
 | organized（结构化知识） | ~900 |
 | processed | ~120 |
 | zcode 对话 | 100 |
-| 新增 category | capture, proposals |
+| preferences | 91（+ EvidenceTask 产出的 per-domain，运行后） |
+| feedback | 30（其中 1 条带 verdict，29 条旧格式无 verdict） |
+| proposals | 1（rejected, domain=Debugging） |
 | reminders | 独立表，支持时间触发 |
 
 ---
@@ -113,9 +183,9 @@ memory-cli 正在支撑一个"个人第二大脑"系统（memory-cli = 记忆，
 ## 剩余待做（按优先级）
 
 ### 高优先（闭环增强）
+- [ ] **两侧联调**：memory-cli `[M]` 契约 + makro `[K]` brain 代码都已落地，但第一周验收 #2/#3（08:00 推送 → accept/reject → 状态一致）从未真实跑过。需同时起 `memory serve` + `makro brain` 观察数据流
+- [ ] **daemon CPU 异常**：当前运行的 `memory serve`（PID 1639）CPU 76.9%，可能是死循环；daemon.log 已 58MB。需排查后用新二进制重启（才能加载 EvidenceTask）
 - [ ] **P2 #10**: 弃用 FileStore（文档标注 SQLite only）
-- [ ] **P2 #11**: 清理旧 reminders 机制（dream extractReminders + category=reminders 旧数据）
-- [ ] **P3 #18**: preferences/habits 加 evidence 字段（accept/reject 历史）
 
 ### 中优先（体验/质量）
 - [ ] Extract 对大 session 分段（720 turns 一次提取率低）
@@ -127,6 +197,7 @@ memory-cli 正在支撑一个"个人第二大脑"系统（memory-cli = 记忆，
 - [ ] 语义搜索（向量索引）
 - [ ] dream 引擎重启用（Light 分类 + Medium 合并）
 - [ ] 多 agent 主动推送（webhook，目前 agent 读 pending.md）
+- [ ] 清理旧 reminders 机制（dream extractReminders + category=reminders 旧数据）
 
 ---
 
@@ -138,7 +209,9 @@ memory-cli 正在支撑一个"个人第二大脑"系统（memory-cli = 记忆，
 4. **memory 是唯一真相源**——makro 的 inbox.db 是 UI 缓存，从 memory 重建
 5. **inbox phase 永不改动**——加工用 consumed_mask bitmask 追踪，不改 phase
 6. **画像合成是独立模块（ProfileTask），不是 dream 的新一级**——职责不同
-7. **GLM-4.5-Flash 免费，但 JSON 不稳定**——多层防御性解析（嵌套数组/wrapper/单字符串）
+7. **EvidenceTask 是 ProfileTask 的细粒度补充**——全局画像 vs per-domain 拟合信号，互不重复
+8. **GLM-4.5-Flash 免费，但 JSON 不稳定**——多层防御性解析（嵌套数组/wrapper/单字符串）
+9. **中文搜索绕开 FTS 走 LIKE+IDF**——FTS5 unicode61 不切 CJK，IDF 加权让稀有实体浮顶
 
 ---
 
@@ -150,3 +223,4 @@ memory-cli 正在支撑一个"个人第二大脑"系统（memory-cli = 记忆，
 | 捕获噪声（琐碎对话淹没 idea） | makro 侧负责 | makro push 时标注 type: idea/task/chat |
 | 写入 API 单点（serve 挂则丢数据） | 待缓解 | makro 侧 buffer+retry（memory 侧已幂等） |
 | metadata JSON 查询性能 | 低风险 | proposal 量小，未来可提取原生列 |
+| daemon CPU 异常（PID 1639 占 76.9%） | 🔴 待查 | 可能死循环，需排查 daemon.log（58MB） |
