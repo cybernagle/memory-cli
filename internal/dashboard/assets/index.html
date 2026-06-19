@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Memory Dashboard</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<script src="https://cdn.jsdelivr.net/npm/marked@12/marked.min.js"></script>
 <style>
 :root {
   --bg: #0f1117;
@@ -254,8 +255,28 @@ a:hover { text-decoration: underline; }
 .step-badge.answer { background: var(--surface2); color: var(--green); }
 .step-text { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .step-count { color: var(--primary); font-size: 11px; white-space: nowrap; }
-.agent-answer { font-size: 14px; color: var(--text); line-height: 1.6; white-space: pre-wrap; word-break: break-word; }
+.agent-answer { font-size: 14px; color: var(--text); line-height: 1.6; word-break: break-word; }
 .agent-answer:empty { display: none; }
+/* Markdown rendering inside agent answers */
+.agent-answer p { margin: 0 0 8px; }
+.agent-answer p:last-child { margin-bottom: 0; }
+.agent-answer ul, .agent-answer ol { margin: 4px 0 8px; padding-left: 20px; }
+.agent-answer li { margin: 2px 0; }
+.agent-answer code { background: var(--surface2); padding: 1px 5px; border-radius: 3px; font-size: 13px; }
+.agent-answer pre { background: var(--surface2); padding: 10px; border-radius: 6px; overflow-x: auto; margin: 8px 0; }
+.agent-answer pre code { background: none; padding: 0; }
+.agent-answer strong { color: var(--text); font-weight: 600; }
+.agent-answer h1, .agent-answer h2, .agent-answer h3 { margin: 12px 0 6px; font-size: 15px; }
+/* Loading indicator */
+.agent-loading { font-size: 13px; color: var(--text2); padding: 8px 0; display: flex; align-items: center; gap: 6px; }
+.loading-dots { display: inline-block; width: 16px; }
+.loading-dots::after {
+  content: '...'; animation: loadingPulse 1.2s infinite;
+}
+@keyframes loadingPulse {
+  0%, 100% { opacity: 0.3; }
+  50% { opacity: 1; }
+}
 .chat-input-area {
   display: flex; flex-direction: column; gap: 8px; padding-top: 12px;
   border-top: 1px solid var(--border); margin-top: 8px;
@@ -1377,6 +1398,9 @@ async function sendChat() {
     '<div class="chat-msg assistant" id="' + agentId + '">' +
     '<div class="chat-bubble">' +
       '<div class="agent-steps" id="' + agentId + '-steps"></div>' +
+      '<div class="agent-loading" id="' + agentId + '-loading">' +
+        '<span class="loading-dots"></span> 正在搜索记忆...' +
+      '</div>' +
       '<div class="agent-answer" id="' + agentId + '-answer"></div>' +
     '</div>' +
     '<div class="chat-sources-container" id="' + agentId + '-sources"></div>' +
@@ -1447,6 +1471,9 @@ async function sendChat() {
 function renderAgentStep(agentId, step) {
   var stepsEl = document.getElementById(agentId + '-steps');
   if (!stepsEl) return;
+  // Hide the initial loading indicator once the first step arrives.
+  var loadingEl = document.getElementById(agentId + '-loading');
+  if (loadingEl) loadingEl.remove();
   var html = '';
   switch(step.type) {
     case 'thinking':
@@ -1468,7 +1495,18 @@ function renderAgentStep(agentId, step) {
 }
 
 function renderAgentFinal(agentId, data) {
-  document.getElementById(agentId + '-answer').textContent = data.answer || 'No response';
+  // Remove loading indicator if still present (e.g., no intermediate steps).
+  var loadingEl = document.getElementById(agentId + '-loading');
+  if (loadingEl) loadingEl.remove();
+  var answerEl = document.getElementById(agentId + '-answer');
+  var answer = data.answer || 'No response';
+  // Render markdown (the LLM returns **bold**, lists, code blocks, etc.) instead of plain
+  // text. marked.js is loaded via CDN. Falls back to escaped text if marked is unavailable.
+  if (typeof marked !== 'undefined') {
+    answerEl.innerHTML = marked.parse(answer);
+  } else {
+    answerEl.textContent = answer;
+  }
 
   if (data.sources && data.sources.length > 0) {
     var srcHtml = '<details class="chat-sources"><summary>' + data.sources.length + ' memory sources</summary>';
