@@ -549,9 +549,14 @@ func (srv *Server) handleAsk(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Search for relevant memories
+	// Extract search keywords from the question. FTS5 with unicode61 tokenizer treats a full
+	// Chinese sentence as one giant token → 0 matches. We split into individual tokens
+	// (English words stay intact; Chinese gets broken into 2-char bigrams) so FTS can match.
+	searchQuery := extractSearchKeywords(req.Question)
+
+	// Search for relevant memories across organized + processed phases.
 	results, err := srv.store.impl.Search(store.SearchOptions{
-		Query: req.Question,
+		Query: searchQuery,
 		Phase: store.PhaseOrganized,
 	})
 	if err != nil {
@@ -561,10 +566,19 @@ func (srv *Server) handleAsk(w http.ResponseWriter, r *http.Request) {
 
 	// Also try searching in processed
 	processed, _ := srv.store.impl.Search(store.SearchOptions{
-		Query: req.Question,
+		Query: searchQuery,
 		Phase: store.PhaseProcessed,
 	})
 	results = append(results, processed...)
+
+	// Also search inbox — it holds the raw conversation turns with the ORIGINAL timestamps.
+	// organized memories carry the processing date, not the event date, so time questions
+	// ("when did I do X") can only be answered from inbox.
+	inbox, _ := srv.store.impl.Search(store.SearchOptions{
+		Query: searchQuery,
+		Phase: store.PhaseInbox,
+	})
+	results = append(results, inbox...)
 
 	// Limit context to top results by relevance (max 20)
 	if len(results) > 20 {
@@ -580,14 +594,17 @@ func (srv *Server) handleAsk(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Build context from memories
+	// Build context from memories — INCLUDE the date so the LLM can answer "when" questions.
+	// Without the date, the model sees only content and cannot tell when something happened.
 	var sb strings.Builder
 	for i, m := range results {
 		content := m.Content
 		if len(content) > 500 {
 			content = content[:500] + "..."
 		}
-		sb.WriteString(fmt.Sprintf("\n[%d] [%s] %s", i+1, m.Category, content))
+		dateStr := m.CreatedAt.Format("2006-01-02 15:04")
+		phase := string(m.Phase)
+		sb.WriteString(fmt.Sprintf("\n[%d] [%s] [%s] [%s] %s", i+1, dateStr, phase, m.Category, content))
 		sb.WriteString("\n")
 	}
 
@@ -663,4 +680,91 @@ func min(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// extractSearchKeywords converts a natural-language question into FTS-friendly tokens.
+// FTS5's unicode61 tokenizer treats each maximal run of CJK characters as a single token
+// (no per-character segmentation), so a full Chinese sentence → 0 matches. Strategy:
+//   - Extract ASCII words (RSA, GLM-4.5, 2026) — these are high-precision FTS tokens.
+//   - Extract meaningful CJK words: split on punctuation/spaces, filter out stop words
+//     (什么/怎么/的/是/吗/呢/大概/时间), keep content words ≥2 chars.
+//   - Join with spaces → FTS implicit AND across tokens.
+//
+// If we end up with nothing usable, fall back to the raw question (let LIKE handle it).
+func extractSearchKeywords(question string) string {
+	var tokens []string
+
+	// Extract ASCII words (letters/digits/hyphens/dots, length ≥ 2).
+	var ascii strings.Builder
+	flushASCII := func() {
+		if ascii.Len() >= 2 {
+			tokens = append(tokens, ascii.String())
+		}
+		ascii.Reset()
+	}
+
+	// CJK stop words — question fillers that won't help find content.
+	stopWords := map[string]bool{
+		"什么": true, "怎么": true, "的吗": true,
+		"的": true, "是": true, "吗": true, "呢": true, "了": true,
+		"大概": true, "时间": true, "时候": true, "哪些": true,
+		"这个": true, "那个": true, "可以": true, "应该": true,
+		"关于": true, "对于": true, "我想": true, "帮我": true,
+		"请问": true, "一下": true, "有没有": true, "知道": true,
+		"制作": true, "做的": true, "时候的": true, "吗的": true,
+		"在哪": true, "如何": true, "为何": true,
+	}
+
+	// Split CJK segments on non-CJK, then filter stop words.
+	var cjkSeg strings.Builder
+	flushCJK := func() {
+		seg := strings.TrimSpace(cjkSeg.String())
+		cjkSeg.Reset()
+		if seg == "" {
+			return
+		}
+		// Try to find meaningful sub-words. Since unicode61 indexes the whole CJK run,
+		// any substring of it is matchable. Extract likely content words by removing
+		// known stop-word prefixes/suffixes.
+		for _, sw := range []string{"的吗", "的吗", "的吗", "什么", "怎么", "大概", "时间", "时候", "这个", "那个", "制作", "做的"} {
+			seg = strings.ReplaceAll(seg, sw, "")
+		}
+		seg = strings.TrimSpace(seg)
+		if len([]rune(seg)) >= 2 && !stopWords[seg] {
+			tokens = append(tokens, seg)
+		}
+	}
+
+	for _, r := range question {
+		if r >= '\u4e00' && r <= '\u9fff' {
+			flushASCII()
+			cjkSeg.WriteRune(r)
+		} else if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '.' {
+			flushCJK()
+			ascii.WriteRune(r)
+		} else {
+			flushASCII()
+			flushCJK()
+		}
+	}
+	flushASCII()
+	flushCJK()
+
+	// Dedup.
+	seen := make(map[string]bool)
+	var out []string
+	for _, t := range tokens {
+		if !seen[t] {
+			seen[t] = true
+			out = append(out, t)
+		}
+	}
+	if len(out) == 0 {
+		return question
+	}
+	// Use FTS OR (not default AND): a memory matching ANY keyword is relevant. AND is too
+	// strict for natural-language questions — "RSA 加密算法视频" as AND returns 0 because no
+	// single memory contains both as exact FTS tokens. OR returns the union, which the LLM
+	// can then rank/filter by relevance.
+	return strings.Join(out, " OR ")
 }

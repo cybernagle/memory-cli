@@ -571,6 +571,19 @@ function timeAgo(dateStr) {
   return Math.floor(diff/86400) + 'd ago';
 }
 
+// formatDateTime returns an absolute "YYYY-MM-DD HH:MM" string — the precise timestamp users
+// want when searching for "when did I do X". Relative time ("3d ago") is useless for that.
+function formatDateTime(dateStr) {
+  var d = new Date(dateStr);
+  if (isNaN(d.getTime())) return dateStr;
+  var Y = d.getFullYear();
+  var M = ('0'+(d.getMonth()+1)).slice(-2);
+  var D = ('0'+d.getDate()).slice(-2);
+  var h = ('0'+d.getHours()).slice(-2);
+  var m = ('0'+d.getMinutes()).slice(-2);
+  return Y+'-'+M+'-'+D+' '+h+':'+m;
+}
+
 function esc(s) {
   const d = document.createElement('div');
   d.textContent = s;
