@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"sort"
 	"strings"
 	"unicode/utf8"
 
@@ -332,28 +333,87 @@ Do you have enough information to answer the question well?
 }
 
 func buildSynthPrompt(question string, results []*store.Memory, history []chatMessage) string {
-	var sb strings.Builder
-	limit := 30
-	if len(results) < limit {
-		limit = len(results)
+	// Dedup by ID (collector may have overlap across search rounds).
+	seen := map[string]bool{}
+	var deduped []*store.Memory
+	for _, m := range results {
+		if !seen[m.ID] {
+			seen[m.ID] = true
+			deduped = append(deduped, m)
+		}
 	}
-	for i := 0; i < limit; i++ {
-		content := results[i].Content
+
+	// Balanced phase selection: ensure inbox (real event dates) isn't crowded out by
+	// organized (processing dates). Same strategy as handleAsk.
+	var org, proc, inbox []*store.Memory
+	for _, m := range deduped {
+		switch m.Phase {
+		case store.PhaseOrganized:
+			org = append(org, m)
+		case store.PhaseProcessed:
+			proc = append(proc, m)
+		case store.PhaseInbox:
+			inbox = append(inbox, m)
+		default:
+			org = append(org, m) // unknown phase → treat as org
+		}
+	}
+	// Inbox ascending — surface earliest dates for "when" questions.
+	sort.Slice(inbox, func(i, j int) bool { return inbox[i].CreatedAt.Before(inbox[j].CreatedAt) })
+
+	var selected []*store.Memory
+	if len(org) > 10 {
+		org = org[:10]
+	}
+	if len(proc) > 4 {
+		proc = proc[:4]
+	}
+	// Spread inbox across dates, take up to 12.
+	inbox = spreadByDateAgent(inbox, 12)
+	selected = append(selected, org...)
+	selected = append(selected, proc...)
+	selected = append(selected, inbox...)
+
+	var sb strings.Builder
+
+	// Compute date range from inbox items (real event dates, not processing dates).
+	var earliestDate, latestDate string
+	for _, m := range inbox {
+		d := m.CreatedAt.Format("2006-01-02")
+		if earliestDate == "" || d < earliestDate {
+			earliestDate = d
+		}
+		if latestDate == "" || d > latestDate {
+			latestDate = d
+		}
+	}
+
+	for i, m := range selected {
+		content := m.Content
 		if len(content) > 300 {
 			content = content[:300] + "..."
 		}
-		sb.WriteString(fmt.Sprintf("\n[%d] [%s] %s", i+1, results[i].Category, content))
+		dateStr := m.CreatedAt.Format("2006-01-02")
+		if m.Phase == store.PhaseOrganized || m.Phase == store.PhaseProcessed {
+			dateStr = "(processed " + dateStr + ")"
+		}
+		sb.WriteString(fmt.Sprintf("\n[%d] DATE: %s | %s", i+1, dateStr, content))
+	}
+
+	dateInstruction := ""
+	if earliestDate != "" {
+		dateInstruction = fmt.Sprintf("\nCRITICAL — DATES: Each memory starts with \"DATE: YYYY-MM-DD\". The real time span is %s to %s. When asked about timing, cite specific dates. Do NOT say \"no date\". Dates marked \"(processed)\" are summary dates, not event dates.", earliestDate, latestDate)
 	}
 
 	historySection := buildHistorySection(history)
-	return fmt.Sprintf(`You are a memory assistant. Answer the user's question based ONLY on the following memories. If the memories don't fully answer the question, acknowledge what's missing. Cite memory categories when referencing specific facts.
+	return fmt.Sprintf(`You are a memory assistant. Answer the user's question based ONLY on the following memories. If the memories don't fully answer the question, acknowledge what's missing.%s
 %s
 User's memories:
 %s
 
 Question: %s
 
-Answer concisely in the same language as the question:`, historySection, sb.String(), question)
+Answer concisely in the same language as the question:`, dateInstruction, historySection, sb.String(), question)
 }
 
 func parseAgentJSON(s string, v any) error {
@@ -537,4 +597,39 @@ func trimHistory(history []chatMessage, maxTokens int) []chatMessage {
 	}
 
 	return history[start:end]
+}
+
+// spreadByDateAgent picks up to n items from memories, spread across distinct dates so the
+// LLM sees the full time span. Same logic as handlers.go spreadByDate but in this file to
+// avoid naming collision.
+func spreadByDateAgent(mems []*store.Memory, n int) []*store.Memory {
+	if len(mems) <= n {
+		return mems
+	}
+	byDate := map[string][]*store.Memory{}
+	var dateOrder []string
+	for _, m := range mems {
+		d := m.CreatedAt.Format("2006-01-02")
+		if _, ok := byDate[d]; !ok {
+			dateOrder = append(dateOrder, d)
+		}
+		byDate[d] = append(byDate[d], m)
+	}
+	var out []*store.Memory
+	for round := 0; len(out) < n; round++ {
+		added := false
+		for _, d := range dateOrder {
+			if round < len(byDate[d]) {
+				out = append(out, byDate[d][round])
+				added = true
+				if len(out) >= n {
+					break
+				}
+			}
+		}
+		if !added {
+			break
+		}
+	}
+	return out
 }
