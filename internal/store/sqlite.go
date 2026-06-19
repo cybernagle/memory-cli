@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 	"time"
@@ -544,7 +545,7 @@ func (s *SqliteStore) Search(opts SearchOptions) ([]*Memory, error) {
 	rows, err := s.db.Query(query, args...)
 	if err != nil {
 		// FTS failed, fall back to LIKE
-		return s.searchLike(opts)
+		return s.SearchLike(opts)
 	}
 	defer rows.Close()
 
@@ -562,7 +563,7 @@ func (s *SqliteStore) Search(opts SearchOptions) ([]*Memory, error) {
 	if len(ids) == 0 {
 		// FTS returned 0 matches — likely a Chinese query that unicode61 can't tokenize.
 		// Fall back to LIKE (substring match), which handles CJK reliably.
-		return s.searchLike(opts)
+		return s.SearchLike(opts)
 	}
 
 	tagMap, _ := s.batchLoadTags(ids)
@@ -583,15 +584,43 @@ func (s *SqliteStore) Search(opts SearchOptions) ([]*Memory, error) {
 	return results, nil
 }
 
-func (s *SqliteStore) searchLike(opts SearchOptions) ([]*Memory, error) {
+func (s *SqliteStore) SearchLike(opts SearchOptions) ([]*Memory, error) {
 	// Split the query on OR (LLM keyword extraction produces "keyword1 OR keyword2").
-	// Rank memories by how many keywords they match — a memory matching 3 keywords (e.g.
-	// "瑞福莱" + "暖通" + "服务") is far more relevant than one matching just "上海".
+	// Rank by information-theoretic weight (IDF): a rare keyword like "瑞福莱" (36 docs out
+	// of 18k) carries far more signal than a common one like "上海" (thousands of docs).
+	// Each memory's score = sum of IDF weights of the keywords it contains. This naturally
+	// surfaces memories matching the rare/specific terms even if they miss the generic ones.
 	keywordStr := strings.ToLower(opts.Query)
 	keywordStr = strings.ReplaceAll(keywordStr, " or ", "|")
 	keywords := strings.Split(keywordStr, "|")
 	for i, k := range keywords {
 		keywords[i] = strings.TrimSpace(k)
+	}
+
+	// Compute total doc count for IDF denominator.
+	var totalDocs int
+	s.db.QueryRow("SELECT COUNT(*) FROM memories").Scan(&totalDocs)
+	if totalDocs == 0 {
+		totalDocs = 1
+	}
+
+	// Compute IDF weight per keyword: weight = log(totalDocs / docsContainingKeyword).
+	// Rare keywords → high weight. Common keywords → near-zero weight.
+	kwWeight := make(map[string]float64)
+	for _, kw := range keywords {
+		if kw == "" {
+			continue
+		}
+		var cnt int
+		s.db.QueryRow("SELECT COUNT(*) FROM memories WHERE lower(content) LIKE ?", "%"+kw+"%").Scan(&cnt)
+		if cnt == 0 {
+			kwWeight[kw] = 0 // keyword doesn't exist anywhere — skip
+		} else {
+			kwWeight[kw] = math.Log(float64(totalDocs) / float64(cnt))
+			if kwWeight[kw] < 0.1 {
+				kwWeight[kw] = 0.1 // floor: even common keywords contribute a little
+			}
+		}
 	}
 
 	memories, err := s.List(ListOptions{Phase: opts.Phase, Scope: opts.Scope})
@@ -601,23 +630,23 @@ func (s *SqliteStore) searchLike(opts SearchOptions) ([]*Memory, error) {
 
 	type scored struct {
 		mem   *Memory
-		score int
+		score float64
 	}
 	var results []scored
 	for _, mem := range memories {
 		contentLower := strings.ToLower(mem.Content)
-		score := 0
+		score := 0.0
 		for _, kw := range keywords {
-			if kw != "" && strings.Contains(contentLower, kw) {
-				score++
+			if kw != "" && kwWeight[kw] > 0 && strings.Contains(contentLower, kw) {
+				score += kwWeight[kw]
 			}
 		}
 		if score > 0 {
 			results = append(results, scored{mem: mem, score: score})
 		}
 	}
-	// Sort by score descending (most keyword matches first).
-	sort.Slice(results, func(i, j int) bool { return results[i].score > results[j].score })
+	// Sort by IDF-weighted score descending — rare-keyword matches float to the top.
+	sort.SliceStable(results, func(i, j int) bool { return results[i].score > results[j].score })
 
 	out := make([]*Memory, len(results))
 	for i, r := range results {

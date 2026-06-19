@@ -575,7 +575,28 @@ func (srv *Server) handleAsk(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Search for relevant memories across organized + processed phases.
+	// Search inbox FIRST — it has the most complete raw data (organized memories are
+	// compressed summaries that may drop specific entities like company names). Then add
+	// organized/processed as supplements. This prevents a case where organized returns
+	// generic matches (e.g. "上海" matching 200 unrelated memories) while the real answer
+	// (e.g. "瑞福莱" only in inbox) gets crowded out.
+	// inbox uses LIKE search directly (not FTS) — FTS OR on generic keywords like "上海"
+	// returns hundreds of irrelevant matches, crowding out the real hits. LIKE ranks by
+	// keyword hit count so "瑞福莱"(rare) beats "上海"(common) in relevance.
+	var inbox []*store.Memory
+	if sqlStore, ok := srv.store.impl.(*store.SqliteStore); ok {
+		inbox, _ = sqlStore.SearchLike(store.SearchOptions{
+			Query: searchQuery,
+			Phase: store.PhaseInbox,
+		})
+	} else {
+		inbox, _ = srv.store.impl.Search(store.SearchOptions{
+			Query: searchQuery,
+			Phase: store.PhaseInbox,
+		})
+	}
+
+	// Search organized + processed as supplements.
 	results, err := srv.store.impl.Search(store.SearchOptions{
 		Query: searchQuery,
 		Phase: store.PhaseOrganized,
@@ -584,26 +605,21 @@ func (srv *Server) handleAsk(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "search failed: "+err.Error())
 		return
 	}
-
-	// Also try searching in processed
 	processed, _ := srv.store.impl.Search(store.SearchOptions{
 		Query: searchQuery,
 		Phase: store.PhaseProcessed,
 	})
 
-	// Also search inbox — it holds the raw conversation turns with the ORIGINAL timestamps.
-	// organized memories carry the processing date, not the event date, so time questions
-	// ("when did I do X") can only be answered from inbox.
-	inbox, _ := srv.store.impl.Search(store.SearchOptions{
-		Query: searchQuery,
-		Phase: store.PhaseInbox,
-	})
-
-	// Build context with balanced phase representation. If we just concatenated and truncated
-	// to 20, organized (215 results for a hot topic) would crowd out inbox (the only source
-	// with real dates). Allocate slots: organized gets 8 (dense summaries), inbox gets 8
-	// (raw turns with timestamps), processed gets 4. Sort each by date desc within its slot.
-	const orgLimit, inboxLimit, procLimit = 8, 8, 4
+	// Allocate slots: inbox gets priority (it has the real data). If inbox has many results,
+	// give it more room and shrink organized.
+	const procLimit = 4
+	inboxLimit := 12
+	orgLimit := 6
+	if len(inbox) < 3 {
+		// Inbox has little — lean more on organized summaries.
+		inboxLimit = 6
+		orgLimit = 12
+	}
 	if len(results) > orgLimit {
 		results = results[:orgLimit]
 	}
@@ -633,10 +649,43 @@ func (srv *Server) handleAsk(w http.ResponseWriter, r *http.Request) {
 	// so it goes first and most prominent on each line. Inbox items carry the real event date;
 	// organized items carry the processing date (marked as such so the LLM doesn't confuse them).
 	var sb strings.Builder
+	// Parse keywords for snippet extraction (so we center the 300-char window on the
+	// keyword, not the start of the message — "瑞福莱" may be at char 500 of a thinking block).
+	snippetKWs := strings.Split(strings.ReplaceAll(strings.ToLower(searchQuery), " or ", "|"), "|")
+
 	for i, m := range results {
 		content := m.Content
 		if len(content) > 300 {
-			content = content[:300] + "..."
+			// Find the earliest keyword position and center the snippet around it.
+			bestPos := 0
+			contentLower := strings.ToLower(content)
+			for _, kw := range snippetKWs {
+				kw = strings.TrimSpace(kw)
+				if kw == "" {
+					continue
+				}
+				if idx := strings.Index(contentLower, kw); idx >= 0 {
+					if bestPos == 0 || idx < bestPos {
+						bestPos = idx
+					}
+				}
+			}
+			// Center a 300-char window on bestPos (clamp to bounds).
+			start := bestPos - 80
+			if start < 0 {
+				start = 0
+			}
+			end := start + 300
+			if end > len(content) {
+				end = len(content)
+			}
+			content = content[start:end]
+			if start > 0 {
+				content = "..." + content
+			}
+			if end < len(m.Content) {
+				content = content + "..."
+			}
 		}
 		dateStr := m.CreatedAt.Format("2006-01-02")
 		// Mark organized dates as processing-time so the LLM distinguishes them from event dates.
