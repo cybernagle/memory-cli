@@ -608,32 +608,46 @@ func (srv *Server) handleAsk(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Build context from memories — INCLUDE the date so the LLM can answer "when" questions.
-	// Without the date, the model sees only content and cannot tell when something happened.
+	// Build context from memories. The DATE is the most important field for "when" questions,
+	// so it goes first and most prominent on each line. Inbox items carry the real event date;
+	// organized items carry the processing date (marked as such so the LLM doesn't confuse them).
 	var sb strings.Builder
 	for i, m := range results {
 		content := m.Content
-		if len(content) > 500 {
-			content = content[:500] + "..."
+		if len(content) > 300 {
+			content = content[:300] + "..."
 		}
-		dateStr := m.CreatedAt.Format("2006-01-02 15:04")
-		phase := string(m.Phase)
-		sb.WriteString(fmt.Sprintf("\n[%d] [%s] [%s] [%s] %s", i+1, dateStr, phase, m.Category, content))
+		dateStr := m.CreatedAt.Format("2006-01-02")
+		// Mark organized dates as processing-time so the LLM distinguishes them from event dates.
+		if m.Phase == store.PhaseOrganized || m.Phase == store.PhaseProcessed {
+			dateStr = "(processed " + dateStr + ")"
+		}
+		sb.WriteString(fmt.Sprintf("\n[%d] DATE: %s | %s", i+1, dateStr, content))
 		sb.WriteString("\n")
+	}
+
+	// Compute the real date range from inbox items (the actual event timespan).
+	var earliestDate, latestDate string
+	for _, m := range inbox {
+		d := m.CreatedAt.Format("2006-01-02")
+		if earliestDate == "" || d < earliestDate {
+			earliestDate = d
+		}
+		if latestDate == "" || d > latestDate {
+			latestDate = d
+		}
 	}
 
 	prompt := fmt.Sprintf(`You are a memory assistant. Answer the user's question based ONLY on the following memories.
 
-IMPORTANT about dates: each memory has a [YYYY-MM-DD HH:MM] timestamp. For [inbox] memories, this is the DATE THE EVENT HAPPENED (when the user actually did/said something). For [organized] memories, this is the processing date, NOT the event date. When asked "when" something happened, PREFER inbox dates over organized dates.
-
-Cite memory numbers [N] when referencing facts.
+CRITICAL — DATES: Each memory line starts with "DATE: YYYY-MM-DD". These are the real dates when things happened. The actual time span of this topic is %s to %s. When asked about timing, you MUST cite specific dates from the memories. Do NOT say "no date information" — the dates are right there at the start of each line. Memories marked "(processed YYYY-MM-DD)" are summaries — their dates are when the summary was generated, not when the event happened; prefer the plain dates.
 
 User's memories:
 %s
 
 Question: %s
 
-Answer concisely in the same language as the question:`, sb.String(), req.Question)
+Answer concisely in the same language as the question:`, earliestDate, latestDate, sb.String(), req.Question)
 
 	if srv.llm == nil {
 		// Fallback: return raw search results
