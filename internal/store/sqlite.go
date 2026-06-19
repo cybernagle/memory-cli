@@ -633,25 +633,38 @@ func (s *SqliteStore) SearchLike(opts SearchOptions) ([]*Memory, error) {
 		score float64
 	}
 	var results []scored
+	// The first keyword from LLM extraction is usually the most specific entity name
+	// (e.g. "瑞福莱暖通设备"). Give it a 2x boost so memories matching it dominate over
+	// memories matching only generic trailing keywords (e.g. "细节", IDF≈5.6 ≈ 瑞福莱 6.2).
+	firstKeywordIdx := -1
+	for i, kw := range keywords {
+		if strings.TrimSpace(kw) != "" {
+			firstKeywordIdx = i
+			break
+		}
+	}
+
 	for _, mem := range memories {
 		contentLower := strings.ToLower(mem.Content)
 		score := 0.0
-		for _, kw := range keywords {
+		for kwi, kw := range keywords {
 			if kw == "" || kwWeight[kw] == 0 {
 				continue
 			}
+			boost := 1.0
+			if kwi == firstKeywordIdx {
+				boost = 2.0 // first keyword = primary entity, double its weight
+			}
 			if strings.Contains(contentLower, kw) {
-				score += kwWeight[kw]
+				score += kwWeight[kw] * boost
 				continue
 			}
 			// Keyword as a whole doesn't match (e.g. "瑞福莱暖通设备（上海）有限公司" is 13
 			// chars but content only has "瑞福莱"). Try progressively shorter CJK prefixes.
 			runes := []rune(kw)
-			matched := false
 			for n := len(runes) - 1; n >= 2; n-- {
 				sub := string(runes[:n])
 				if strings.Contains(contentLower, sub) {
-					// Use the prefix's own IDF (recompute for this shorter substring).
 					var subCnt int
 					s.db.QueryRow("SELECT COUNT(*) FROM memories WHERE lower(content) LIKE ?", "%"+sub+"%").Scan(&subCnt)
 					if subCnt > 0 {
@@ -659,13 +672,11 @@ func (s *SqliteStore) SearchLike(opts SearchOptions) ([]*Memory, error) {
 						if w < 0.1 {
 							w = 0.1
 						}
-						score += w
+						score += w * boost
 					}
-					matched = true
 					break
 				}
 			}
-			_ = matched
 		}
 		if score > 0 {
 			results = append(results, scored{mem: mem, score: score})
