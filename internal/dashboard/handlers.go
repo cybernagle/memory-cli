@@ -542,17 +542,29 @@ func heatmapLevel(count, max int) int {
 
 func (srv *Server) handleAsk(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Question string `json:"question"`
+		Question string         `json:"question"`
+		History  []chatMessage  `json:"history"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Question == "" {
 		writeError(w, http.StatusBadRequest, "missing question")
 		return
 	}
 
-	// Extract search keywords from the question. FTS5 with unicode61 tokenizer treats a full
-	// Chinese sentence as one giant token → 0 matches. We split into individual tokens
-	// (English words stay intact; Chinese gets broken into 2-char bigrams) so FTS can match.
-	searchQuery := extractSearchKeywords(req.Question)
+	// Build a search query that includes context from recent conversation. A follow-up like
+	// "有相关的时间记录吗？" is meaningless without the prior question ("juli landing 制作记录").
+	// We prepend the last user turn's keywords to give the search context.
+	searchInput := req.Question
+	if len(req.History) > 0 {
+		for i := len(req.History) - 1; i >= 0; i-- {
+			if req.History[i].Role == "user" && req.History[i].Content != req.Question {
+				searchInput = req.History[i].Content + " " + req.Question
+				break
+			}
+		}
+	}
+
+	// Extract search keywords from the combined question + context.
+	searchQuery := extractSearchKeywords(searchInput)
 
 	// Search for relevant memories across organized + processed phases.
 	results, err := srv.store.impl.Search(store.SearchOptions{

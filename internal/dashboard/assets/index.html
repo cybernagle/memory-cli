@@ -1426,7 +1426,7 @@ async function sendChat() {
       var resp = await fetch('/api/ask', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ question: question })
+        body: JSON.stringify({ question: question, history: history.slice(0, -1) })
       });
       var data = await resp.json();
 
