@@ -569,7 +569,6 @@ func (srv *Server) handleAsk(w http.ResponseWriter, r *http.Request) {
 		Query: searchQuery,
 		Phase: store.PhaseProcessed,
 	})
-	results = append(results, processed...)
 
 	// Also search inbox — it holds the raw conversation turns with the ORIGINAL timestamps.
 	// organized memories carry the processing date, not the event date, so time questions
@@ -578,12 +577,27 @@ func (srv *Server) handleAsk(w http.ResponseWriter, r *http.Request) {
 		Query: searchQuery,
 		Phase: store.PhaseInbox,
 	})
-	results = append(results, inbox...)
 
-	// Limit context to top results by relevance (max 20)
-	if len(results) > 20 {
-		results = results[:20]
+	// Build context with balanced phase representation. If we just concatenated and truncated
+	// to 20, organized (215 results for a hot topic) would crowd out inbox (the only source
+	// with real dates). Allocate slots: organized gets 8 (dense summaries), inbox gets 8
+	// (raw turns with timestamps), processed gets 4. Sort each by date desc within its slot.
+	const orgLimit, inboxLimit, procLimit = 8, 8, 4
+	if len(results) > orgLimit {
+		results = results[:orgLimit]
 	}
+	if len(processed) > procLimit {
+		processed = processed[:procLimit]
+	}
+	// For inbox, pick items spread across different dates (not all from one day) so the LLM
+	// sees the full time span. Sort ASCENDING (oldest first) — for "when did I do X" questions,
+	// the earliest date (project start) is the most important to surface.
+	sort.Slice(inbox, func(i, j int) bool {
+		return inbox[i].CreatedAt.Before(inbox[j].CreatedAt)
+	})
+	inbox = spreadByDate(inbox, inboxLimit)
+	results = append(results, processed...)
+	results = append(results, inbox...)
 
 	if len(results) == 0 {
 		writeJSON(w, http.StatusOK, map[string]any{
@@ -608,7 +622,11 @@ func (srv *Server) handleAsk(w http.ResponseWriter, r *http.Request) {
 		sb.WriteString("\n")
 	}
 
-	prompt := fmt.Sprintf(`You are a memory assistant. Answer the user's question based ONLY on the following memories. If the memories don't contain relevant information, say so. Cite memory IDs when referencing specific facts.
+	prompt := fmt.Sprintf(`You are a memory assistant. Answer the user's question based ONLY on the following memories.
+
+IMPORTANT about dates: each memory has a [YYYY-MM-DD HH:MM] timestamp. For [inbox] memories, this is the DATE THE EVENT HAPPENED (when the user actually did/said something). For [organized] memories, this is the processing date, NOT the event date. When asked "when" something happened, PREFER inbox dates over organized dates.
+
+Cite memory numbers [N] when referencing facts.
 
 User's memories:
 %s
@@ -682,7 +700,42 @@ func min(a, b int) int {
 	return b
 }
 
-// extractSearchKeywords converts a natural-language question into FTS-friendly tokens.
+// spreadByDate picks up to n items from memories, spread across distinct dates so the LLM
+// sees the full time span (not 8 items all from the same day). Groups by date, then round-
+// robins one from each date until the limit is reached.
+func spreadByDate(mems []*store.Memory, n int) []*store.Memory {
+	if len(mems) <= n {
+		return mems
+	}
+	// Group by date.
+	byDate := map[string][]*store.Memory{}
+	var dateOrder []string
+	for _, m := range mems {
+		d := m.CreatedAt.Format("2006-01-02")
+		if _, ok := byDate[d]; !ok {
+			dateOrder = append(dateOrder, d)
+		}
+		byDate[d] = append(byDate[d], m)
+	}
+	// Round-robin across dates.
+	var out []*store.Memory
+	for round := 0; len(out) < n; round++ {
+		added := false
+		for _, d := range dateOrder {
+			if round < len(byDate[d]) {
+				out = append(out, byDate[d][round])
+				added = true
+				if len(out) >= n {
+					break
+				}
+			}
+		}
+		if !added {
+			break
+		}
+	}
+	return out
+}
 // FTS5's unicode61 tokenizer treats each maximal run of CJK characters as a single token
 // (no per-character segmentation), so a full Chinese sentence → 0 matches. Strategy:
 //   - Extract ASCII words (RSA, GLM-4.5, 2026) — these are high-precision FTS tokens.
