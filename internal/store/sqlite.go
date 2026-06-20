@@ -551,22 +551,42 @@ func (s *SqliteStore) Search(opts SearchOptions) ([]*Memory, error) {
 		query += " AND m.created_at <= ?"
 		args = append(args, opts.To.Format(time.RFC3339))
 	}
-	// Strategy-dependent ranking. BM25 strategy uses FTS5's built-in bm25() relevance
-	// scoring in the FTS subquery; IDF strategy (default) orders by created_at (relevance
-	// for the inbox path is handled by SearchLike's IDF ranking). The subquery structure
-	// stays the same — only the inner ORDER BY changes.
-	if s.searchStrategy == "bm25" {
+	// Strategy dispatch: hybrid fuses BM25+IDF via RRF; bm25/idf delegate to searchFTS.
+	if s.searchStrategy == "hybrid" {
+		return s.searchHybrid(opts)
+	}
+	return s.searchFTS(opts, s.searchStrategy == "bm25")
+}
+
+// searchFTS runs the FTS5 query built by Search, with optional BM25 relevance ordering.
+// Extracted so searchHybrid can call it without re-entering the strategy switch (recursion).
+func (s *SqliteStore) searchFTS(opts SearchOptions, bm25 bool) ([]*Memory, error) {
+	query := `
+		SELECT m.id, m.content, m.content_hash, m.phase, m.category, m.scope, m.source,
+		       m.session_id, m.created_at, m.updated_at, m.expires_at, m.access_count, m.version, m.processed_by, m.project, m.consumed_mask,
+		       m.message_uuid, m.parent_uuid, m.role, m.git_branch, m.model, m.prompt_id, m.metadata
+		FROM memories m
+		WHERE m.id IN (
+			SELECT memory_id FROM memories_fts WHERE memories_fts MATCH ?
+		)`
+	args := []interface{}{opts.Query}
+	if opts.Phase != "" { query += " AND m.phase = ?"; args = append(args, string(opts.Phase)) }
+	if opts.Scope != "" { query += " AND m.scope = ?"; args = append(args, opts.Scope) }
+	if opts.Project != "" { query += " AND m.project = ?"; args = append(args, opts.Project) }
+	if opts.SessionID != "" { query += " AND m.session_id = ?"; args = append(args, opts.SessionID) }
+	if opts.Category != "" { query += " AND m.category = ?"; args = append(args, string(opts.Category)) }
+	if opts.From != nil { query += " AND m.created_at >= ?"; args = append(args, opts.From.Format(time.RFC3339)) }
+	if opts.To != nil { query += " AND m.created_at <= ?"; args = append(args, opts.To.Format(time.RFC3339)) }
+	if bm25 {
 		query = strings.Replace(query,
 			"SELECT memory_id FROM memories_fts WHERE memories_fts MATCH ?",
 			"SELECT memory_id FROM memories_fts WHERE memories_fts MATCH ? ORDER BY bm25(memories_fts)", 1)
-		// No outer ORDER BY — preserve the BM25 relevance order from the subquery.
 	} else {
 		query += " ORDER BY m.created_at DESC"
 	}
 
 	rows, err := s.db.Query(query, args...)
 	if err != nil {
-		// FTS failed, fall back to LIKE
 		return s.SearchLike(opts)
 	}
 	defer rows.Close()
@@ -575,35 +595,74 @@ func (s *SqliteStore) Search(opts SearchOptions) ([]*Memory, error) {
 	var ids []string
 	for rows.Next() {
 		mem, err := scanMemoryRow(rows)
-		if err != nil {
-			continue
-		}
+		if err != nil { continue }
 		results = append(results, mem)
 		ids = append(ids, mem.ID)
 	}
-
 	if len(ids) == 0 {
-		// FTS returned 0 matches — likely a Chinese query that unicode61 can't tokenize.
-		// Fall back to LIKE (substring match), which handles CJK reliably.
 		return s.SearchLike(opts)
 	}
 
 	tagMap, _ := s.batchLoadTags(ids)
 	linkMap, _ := s.batchLoadLinks(ids)
-
 	for _, mem := range results {
 		mem.Tags = tagMap[mem.ID]
-		if mem.Tags == nil {
-			mem.Tags = []string{}
-		}
+		if mem.Tags == nil { mem.Tags = []string{} }
 		mem.Links = linkMap[mem.ID]
-		if mem.Links == nil {
-			mem.Links = []string{}
-		}
+		if mem.Links == nil { mem.Links = []string{} }
 	}
-
 	results = s.filterSearch(results, opts)
 	return results, nil
+}
+
+// searchHybrid runs both FTS (BM25-ranked) and SearchLike (IDF-ranked), then fuses the two
+// ranked lists via Reciprocal Rank Fusion (RRF). RRF doesn't need score normalization
+// (BM25 and IDF have different scales) — it only uses rank positions:
+//
+//	RRF_score(doc) = Σ 1/(k + rank_in_each_list)   where k=60 (standard constant)
+//
+// This combines BM25's strength (English/segmented text, term frequency saturation) with
+// IDF+LIKE's strength (Chinese entity names via CJK prefix matching). A doc ranked #1 in
+// IDF but #50 in BM25 still scores well; a doc ranked #1 in both dominates.
+func (s *SqliteStore) searchHybrid(opts SearchOptions) ([]*Memory, error) {
+	// Run FTS directly (NOT via s.Search to avoid recursion — Search would re-enter
+	// searchHybrid). We build the FTS query inline with BM25 ordering.
+	ftsResults, _ := s.searchFTS(opts, true) // true = BM25 ordering
+
+	// Run SearchLike (IDF + CJK prefix + boost).
+	likeResults, _ := s.SearchLike(opts)
+
+	// Fuse via RRF.
+	const rrfK = 60.0
+	type entry struct {
+		mem   *Memory
+		score float64
+	}
+	merged := make(map[string]*entry)
+
+	addRank := func(results []*Memory) {
+		for rank, m := range results {
+			if _, ok := merged[m.ID]; !ok {
+				merged[m.ID] = &entry{mem: m}
+			}
+			merged[m.ID].score += 1.0 / (rrfK + float64(rank+1))
+		}
+	}
+	addRank(ftsResults)
+	addRank(likeResults)
+
+	// Collect and sort by RRF score descending.
+	all := make([]*entry, 0, len(merged))
+	for _, e := range merged {
+		all = append(all, e)
+	}
+	sort.SliceStable(all, func(i, j int) bool { return all[i].score > all[j].score })
+
+	out := make([]*Memory, len(all))
+	for i, e := range all {
+		out[i] = e.mem
+	}
+	return out, nil
 }
 
 func (s *SqliteStore) SearchLike(opts SearchOptions) ([]*Memory, error) {
