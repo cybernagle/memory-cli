@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -542,6 +543,101 @@ func heatmapLevel(count, max int) int {
 	}
 }
 
+// detectDateIntent checks if a question asks about a specific day ("今天"/"昨天"/"X月X号").
+// Returns the date + true if so. These questions need date filtering, not keyword search.
+func detectDateIntent(question string) (time.Time, bool) {
+	now := time.Now()
+	lower := strings.ToLower(question)
+
+	// "今天" / "today"
+	if strings.Contains(question, "今天") || strings.Contains(lower, "today") {
+		return now, true
+	}
+	// "昨天" / "yesterday"
+	if strings.Contains(question, "昨天") || strings.Contains(lower, "yesterday") {
+		return now.AddDate(0, 0, -1), true
+	}
+	// "前天"
+	if strings.Contains(question, "前天") {
+		return now.AddDate(0, 0, -2), true
+	}
+	// "X月X号" / "X月X日" — Chinese date format.
+	re := regexp.MustCompile(`(\d{1,2})月(\d{1,2})[号日]`)
+	if m := re.FindStringSubmatch(question); m != nil {
+		month, _ := strconv.Atoi(m[1])
+		day, _ := strconv.Atoi(m[2])
+		t := time.Date(now.Year(), time.Month(month), day, 0, 0, 0, 0, now.Location())
+		if t.After(now.AddDate(0, 0, 1)) {
+			t = t.AddDate(-1, 0, 0) // date in future → last year
+		}
+		return t, true
+	}
+	// "YYYY-MM-DD" / "MM-DD"
+	re2 := regexp.MustCompile(`(\d{4})-(\d{2})-(\d{2})`)
+	if m := re2.FindStringSubmatch(question); m != nil {
+		if t, err := time.Parse("2006-01-02", m[0]); err == nil {
+			return t, true
+		}
+	}
+	return time.Time{}, false
+}
+
+// handleTimeIntentAsk handles "今天都干嘛了" / "6月20号做了什么" — fetches all memories for
+// that date, summarizes them via LLM. This is the timeline-summary path, NOT keyword search.
+func (srv *Server) handleTimeIntentAsk(w http.ResponseWriter, r *http.Request, date time.Time, question string) {
+	// Load memories for the target date.
+	start := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, date.Location())
+	end := start.Add(24*time.Hour - time.Second)
+	items, err := srv.store.impl.List(store.ListOptions{
+		CreatedAfter:  &start,
+		CreatedBefore: &end,
+		Limit:         500,
+	})
+	if err != nil || len(items) == 0 {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"answer":  fmt.Sprintf("%s 没有记忆记录。", date.Format("2006-01-02")),
+			"sources": []any{}},
+		)
+		return
+	}
+
+	// Build a timeline prompt from the day's memories.
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("以下是用户在 %s 的活动记录（按时间排序）。请总结用户这一天做了什么、想了什么、做了什么决定。\n\n", date.Format("2006-01-02")))
+	for i, m := range items {
+		if i >= 100 {
+			sb.WriteString(fmt.Sprintf("... 共 %d 条记录\n", len(items)))
+			break
+		}
+		timeStr := m.CreatedAt.Format("15:04")
+		content := m.Content
+		if len(content) > 200 {
+			content = content[:200] + "..."
+		}
+		role := m.Role
+		if role == "" { role = "note" }
+		sb.WriteString(fmt.Sprintf("[%s][%s] %s\n", timeStr, role, content))
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
+	defer cancel()
+	summary, err := srv.llm.Chat(ctx, sb.String())
+	if err != nil {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"answer":  fmt.Sprintf("%s 有 %d 条记录，但总结失败：%v", date.Format("2006-01-02"), len(items), err),
+			"sources": []any{}},
+		)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"answer":  summary,
+		"sources": []any{},
+		"date":    date.Format("2006-01-02"),
+		"count":   len(items),
+	})
+}
+
 func (srv *Server) handleAsk(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Question string         `json:"question"`
@@ -549,6 +645,14 @@ func (srv *Server) handleAsk(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Question == "" {
 		writeError(w, http.StatusBadRequest, "missing question")
+		return
+	}
+
+	// Detect time-intent questions ("今天都干嘛了", "6月20号做了什么", "昨天干了啥").
+	// These should NOT go through keyword search (搜"今天" hits unrelated memories that
+	// happen to contain the word "今天"). Instead, filter by date and summarize.
+	if date, ok := detectDateIntent(req.Question); ok {
+		srv.handleTimeIntentAsk(w, r, date, req.Question)
 		return
 	}
 
