@@ -543,99 +543,166 @@ func heatmapLevel(count, max int) int {
 	}
 }
 
-// detectDateIntent checks if a question asks about a specific day ("今天"/"昨天"/"X月X号").
-// Returns the date + true if so. These questions need date filtering, not keyword search.
-func detectDateIntent(question string) (time.Time, bool) {
-	now := time.Now()
-	lower := strings.ToLower(question)
-
-	// "今天" / "today"
-	if strings.Contains(question, "今天") || strings.Contains(lower, "today") {
-		return now, true
-	}
-	// "昨天" / "yesterday"
-	if strings.Contains(question, "昨天") || strings.Contains(lower, "yesterday") {
-		return now.AddDate(0, 0, -1), true
-	}
-	// "前天"
-	if strings.Contains(question, "前天") {
-		return now.AddDate(0, 0, -2), true
-	}
-	// "X月X号" / "X月X日" — Chinese date format.
-	re := regexp.MustCompile(`(\d{1,2})月(\d{1,2})[号日]`)
-	if m := re.FindStringSubmatch(question); m != nil {
-		month, _ := strconv.Atoi(m[1])
-		day, _ := strconv.Atoi(m[2])
-		t := time.Date(now.Year(), time.Month(month), day, 0, 0, 0, 0, now.Location())
-		if t.After(now.AddDate(0, 0, 1)) {
-			t = t.AddDate(-1, 0, 0) // date in future → last year
-		}
-		return t, true
-	}
-	// "YYYY-MM-DD" / "MM-DD"
-	re2 := regexp.MustCompile(`(\d{4})-(\d{2})-(\d{2})`)
-	if m := re2.FindStringSubmatch(question); m != nil {
-		if t, err := time.Parse("2006-01-02", m[0]); err == nil {
-			return t, true
-		}
-	}
-	return time.Time{}, false
+// ─── Intent detection layer ───
+// detectTimeIntent checks for time-based questions and returns a date range.
+// Supports: 今天/昨天/前天, X月X号, 上周/这周, 近N天, X月X号到Y月Y号, YYYY-MM-DD.
+type dateRange struct {
+	from, to time.Time
+	label    string
 }
 
-// handleTimeIntentAsk handles "今天都干嘛了" / "6月20号做了什么" — fetches all memories for
-// that date, summarizes them via LLM. This is the timeline-summary path, NOT keyword search.
-func (srv *Server) handleTimeIntentAsk(w http.ResponseWriter, r *http.Request, date time.Time, question string) {
-	// Load memories for the target date.
-	start := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, date.Location())
-	end := start.Add(24*time.Hour - time.Second)
-	items, err := srv.store.impl.List(store.ListOptions{
-		CreatedAfter:  &start,
-		CreatedBefore: &end,
-		Limit:         500,
-	})
+func detectTimeIntent(question string) (*dateRange, bool) {
+	now := time.Now()
+	loc := now.Location()
+	lower := strings.ToLower(question)
+
+	if m := regexp.MustCompile(`(?:近|最近)\s*(\d+)\s*天`).FindStringSubmatch(question); m != nil {
+		n, _ := strconv.Atoi(m[1])
+		return &dateRange{from: now.AddDate(0, 0, -n), to: now, label: fmt.Sprintf("近%d天", n)}, true
+	}
+	if strings.Contains(question, "上周") || strings.Contains(lower, "last week") {
+		thisMonday := now.AddDate(0, 0, -(int(now.Weekday())+6)%7)
+		lastMonday := thisMonday.AddDate(0, 0, -7)
+		lastSunday := lastMonday.AddDate(0, 0, 6)
+		return &dateRange{from: lastMonday, to: lastSunday, label: fmt.Sprintf("上周(%s到%s)", lastMonday.Format("1月2日"), lastSunday.Format("1月2日"))}, true
+	}
+	if strings.Contains(question, "这周") || strings.Contains(question, "本周") || strings.Contains(lower, "this week") {
+		thisMonday := now.AddDate(0, 0, -(int(now.Weekday())+6)%7)
+		return &dateRange{from: thisMonday, to: now, label: fmt.Sprintf("这周(%s至今)", thisMonday.Format("1月2日"))}, true
+	}
+	if strings.Contains(question, "今天") || strings.Contains(lower, "today") {
+		s := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc)
+		return &dateRange{from: s, to: s.Add(24*time.Hour - time.Second), label: s.Format("2006-01-02")}, true
+	}
+	if strings.Contains(question, "昨天") || strings.Contains(lower, "yesterday") {
+		d := now.AddDate(0, 0, -1)
+		s := time.Date(d.Year(), d.Month(), d.Day(), 0, 0, 0, 0, loc)
+		return &dateRange{from: s, to: s.Add(24*time.Hour - time.Second), label: s.Format("2006-01-02")}, true
+	}
+	if strings.Contains(question, "前天") {
+		d := now.AddDate(0, 0, -2)
+		s := time.Date(d.Year(), d.Month(), d.Day(), 0, 0, 0, 0, loc)
+		return &dateRange{from: s, to: s.Add(24*time.Hour - time.Second), label: s.Format("2006-01-02")}, true
+	}
+	if m := regexp.MustCompile(`(\d{1,2})月(\d{1,2})[号日]\s*(?:到|至|~|-|—)\s*(\d{1,2})月(\d{1,2})[号日]`).FindStringSubmatch(question); m != nil {
+		m1, _ := strconv.Atoi(m[1]); d1, _ := strconv.Atoi(m[2])
+		m2, _ := strconv.Atoi(m[3]); d2, _ := strconv.Atoi(m[4])
+		from := time.Date(now.Year(), time.Month(m1), d1, 0, 0, 0, 0, loc)
+		to := time.Date(now.Year(), time.Month(m2), d2, 23, 59, 59, 0, loc)
+		if from.After(now) { from = from.AddDate(-1, 0, 0); to = to.AddDate(-1, 0, 0) }
+		return &dateRange{from: from, to: to, label: fmt.Sprintf("%s到%s", from.Format("1月2日"), to.Format("1月2日"))}, true
+	}
+	if m := regexp.MustCompile(`(\d{1,2})月(\d{1,2})[号日]`).FindStringSubmatch(question); m != nil {
+		month, _ := strconv.Atoi(m[1]); day, _ := strconv.Atoi(m[2])
+		t := time.Date(now.Year(), time.Month(month), day, 0, 0, 0, 0, loc)
+		if t.After(now.AddDate(0, 0, 1)) { t = t.AddDate(-1, 0, 0) }
+		return &dateRange{from: t, to: t.Add(24*time.Hour - time.Second), label: t.Format("2006-01-02")}, true
+	}
+	if m := regexp.MustCompile(`(\d{4})-(\d{2})-(\d{2})`).FindStringSubmatch(question); m != nil {
+		if t, err := time.Parse("2006-01-02", m[0]); err == nil {
+			return &dateRange{from: t, to: t.Add(24*time.Hour - time.Second), label: t.Format("2006-01-02")}, true
+		}
+	}
+	return nil, false
+}
+
+// detectAggregateIntent: "有多少" / "有哪些" / "哪些" / "列出" / "how many"
+func detectAggregateIntent(question string) bool {
+	lower := strings.ToLower(question)
+	for _, w := range []string{"多少", "几个", "几条", "总数", "how many", "count", "统计", "有哪些", "哪些", "所有", "列出"} {
+		if strings.Contains(lower, w) { return true }
+	}
+	return false
+}
+
+// detectRelationIntent: "A和B什么关系" / "A与B如何关联"
+func detectRelationIntent(question string) bool {
+	if strings.Contains(question, "什么关系") || strings.Contains(question, "关系是") { return true }
+	if regexp.MustCompile(`.+[和与跟].+`).MatchString(question) &&
+		(strings.Contains(question, "关系") || strings.Contains(question, "关联") || strings.Contains(question, "联系")) {
+		return true
+	}
+	return false
+}
+
+// handleTimeIntentAsk: timeline summary for date ranges.
+func (srv *Server) handleTimeIntentAsk(w http.ResponseWriter, r *http.Request, dr *dateRange, question string) {
+	items, err := srv.store.impl.List(store.ListOptions{CreatedAfter: &dr.from, CreatedBefore: &dr.to, Limit: 500})
 	if err != nil || len(items) == 0 {
-		writeJSON(w, http.StatusOK, map[string]any{
-			"answer":  fmt.Sprintf("%s 没有记忆记录。", date.Format("2006-01-02")),
-			"sources": []any{}},
-		)
+		writeJSON(w, http.StatusOK, map[string]any{"answer": fmt.Sprintf("%s 没有记忆记录。", dr.label), "sources": []any{}})
 		return
 	}
-
-	// Build a timeline prompt from the day's memories.
+	sort.Slice(items, func(i, j int) bool { return items[i].CreatedAt.Before(items[j].CreatedAt) })
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("以下是用户在 %s 的活动记录（按时间排序）。请总结用户这一天做了什么、想了什么、做了什么决定。\n\n", date.Format("2006-01-02")))
+	sb.WriteString(fmt.Sprintf("以下是用户在 %s 的活动记录（共%d条）。请总结用户这段时间做了什么。用中文回答。\n\n", dr.label, len(items)))
 	for i, m := range items {
-		if i >= 100 {
-			sb.WriteString(fmt.Sprintf("... 共 %d 条记录\n", len(items)))
-			break
-		}
-		timeStr := m.CreatedAt.Format("15:04")
-		content := m.Content
-		if len(content) > 200 {
-			content = content[:200] + "..."
-		}
-		role := m.Role
-		if role == "" { role = "note" }
-		sb.WriteString(fmt.Sprintf("[%s][%s] %s\n", timeStr, role, content))
+		if i >= 100 { sb.WriteString(fmt.Sprintf("... 共 %d 条\n", len(items))); break }
+		c := m.Content; if len(c) > 200 { c = c[:200] + "..." }
+		role := m.Role; if role == "" { role = "note" }
+		sb.WriteString(fmt.Sprintf("[%s][%s] %s\n", m.CreatedAt.Format("01-02 15:04"), role, c))
 	}
-
-	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
-	defer cancel()
+	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second); defer cancel()
 	summary, err := srv.llm.Chat(ctx, sb.String())
-	if err != nil {
-		writeJSON(w, http.StatusOK, map[string]any{
-			"answer":  fmt.Sprintf("%s 有 %d 条记录，但总结失败：%v", date.Format("2006-01-02"), len(items), err),
-			"sources": []any{}},
-		)
+	if err != nil { summary = fmt.Sprintf("%s 有 %d 条记录，但总结失败。", dr.label, len(items)) }
+	writeJSON(w, http.StatusOK, map[string]any{"answer": summary, "sources": []any{}, "date": dr.label, "count": len(items)})
+}
+
+// handleAggregateIntent: count/list questions via SQL aggregation.
+func (srv *Server) handleAggregateIntent(w http.ResponseWriter, r *http.Request, question string) {
+	sqlStore, ok := srv.store.impl.(*store.SqliteStore)
+	if !ok { return }
+	db := sqlStore.DB()
+	var sb strings.Builder
+	sb.WriteString("根据记忆数据库的统计：\n\n**记忆总数**\n")
+	rows, _ := db.Query("SELECT phase, COUNT(*) FROM memories GROUP BY phase ORDER BY COUNT(*) DESC")
+	if rows != nil {
+		for rows.Next() { var p string; var c int; rows.Scan(&p, &c); sb.WriteString(fmt.Sprintf("- %s: %d 条\n", p, c)) }
+		rows.Close()
+	}
+	if strings.Contains(strings.ToLower(question), "项目") || strings.Contains(strings.ToLower(question), "project") {
+		sb.WriteString("\n**项目分布**\n")
+		prows, _ := db.Query("SELECT project, COUNT(*) FROM memories WHERE project != '' GROUP BY project ORDER BY COUNT(*) DESC LIMIT 20")
+		if prows != nil { for prows.Next() { var p string; var c int; prows.Scan(&p, &c); sb.WriteString(fmt.Sprintf("- %s: %d 条\n", p, c)) }; prows.Close() }
+	}
+	if regexp.MustCompile(`(哪些|所有|列出)`).MatchString(question) {
+		for _, kw := range []string{"企业", "公司", "合同"} {
+			if strings.Contains(question, kw) {
+				sb.WriteString(fmt.Sprintf("\n**相关%s记录**\n", kw))
+				erows, _ := db.Query("SELECT DISTINCT substr(content, 1, 80) FROM memories WHERE content LIKE ? AND content NOT LIKE '%<system-reminder>%' LIMIT 20", "%"+kw+"%")
+				if erows != nil { cnt := 0; for erows.Next() { var c string; erows.Scan(&c); cnt++; sb.WriteString(fmt.Sprintf("%d. %s\n", cnt, c)) }; erows.Close() }
+			}
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"answer": sb.String(), "sources": []any{}})
+}
+
+// handleRelationIntent: co-occurrence search for "A和B什么关系".
+func (srv *Server) handleRelationIntent(w http.ResponseWriter, r *http.Request, question string) {
+	var a, b string
+	if m := regexp.MustCompile(`(.+?)(?:和|与|跟|and)(.+?)(?:什么|怎么|如何|有).*(?:关系|关联|联系)`).FindStringSubmatch(question); m != nil {
+		a = strings.TrimSpace(m[1]); b = strings.TrimSpace(m[2])
+	}
+	if a == "" || b == "" { return }
+	allMems, _ := srv.store.impl.List(store.ListOptions{Limit: 5000})
+	var co []*store.Memory
+	for _, m := range allMems {
+		if strings.Contains(m.Content, a) && strings.Contains(m.Content, b) { co = append(co, m) }
+	}
+	if len(co) == 0 {
+		writeJSON(w, http.StatusOK, map[string]any{"answer": fmt.Sprintf("没有找到 %s 和 %s 同时出现的记忆。", a, b), "sources": []any{}})
 		return
 	}
-
-	writeJSON(w, http.StatusOK, map[string]any{
-		"answer":  summary,
-		"sources": []any{},
-		"date":    date.Format("2006-01-02"),
-		"count":   len(items),
-	})
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("以下是同时提到 \"%s\" 和 \"%s\" 的记忆（共%d条）。请总结它们的关系。用中文回答。\n\n", a, b, len(co)))
+	for i, m := range co {
+		if i >= 20 { break }
+		c := m.Content; if len(c) > 300 { c = c[:300] + "..." }
+		sb.WriteString(fmt.Sprintf("[DATE: %s] %s\n", m.CreatedAt.Format("2006-01-02"), c))
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second); defer cancel()
+	ans, err := srv.llm.Chat(ctx, sb.String())
+	if err != nil { ans = fmt.Sprintf("找到 %d 条共现记录，但总结失败。", len(co)) }
+	writeJSON(w, http.StatusOK, map[string]any{"answer": ans, "sources": []any{}, "count": len(co)})
 }
 
 func (srv *Server) handleAsk(w http.ResponseWriter, r *http.Request) {
@@ -648,11 +715,20 @@ func (srv *Server) handleAsk(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Detect time-intent questions ("今天都干嘛了", "6月20号做了什么", "昨天干了啥").
-	// These should NOT go through keyword search (搜"今天" hits unrelated memories that
-	// happen to contain the word "今天"). Instead, filter by date and summarize.
-	if date, ok := detectDateIntent(req.Question); ok {
-		srv.handleTimeIntentAsk(w, r, date, req.Question)
+	// ── Intent dispatch ──
+	// 1. Time intent: "今天/昨天/上周/近7天/6月15到20号"
+	if dr, ok := detectTimeIntent(req.Question); ok {
+		srv.handleTimeIntentAsk(w, r, dr, req.Question)
+		return
+	}
+	// 2. Aggregate/list intent: "有多少记忆/有哪些项目/服务过哪些企业"
+	if detectAggregateIntent(req.Question) {
+		srv.handleAggregateIntent(w, r, req.Question)
+		return
+	}
+	// 3. Relation intent: "A和B什么关系"
+	if detectRelationIntent(req.Question) {
+		srv.handleRelationIntent(w, r, req.Question)
 		return
 	}
 
