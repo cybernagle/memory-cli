@@ -653,33 +653,115 @@ func (srv *Server) handleTimeIntentAsk(w http.ResponseWriter, r *http.Request, d
 	writeJSON(w, http.StatusOK, map[string]any{"answer": summary, "sources": []any{}, "date": dr.label, "count": len(items)})
 }
 
-// handleAggregateIntent: count/list questions via SQL aggregation.
+// handleAggregateIntent handles count/list and entity-enumeration questions.
+// Two modes:
+//   - Pure stats ("多少/几个/总数") → SQL COUNT, fast, no LLM.
+//   - Entity enumeration ("什么公司/有哪些合同/服务过哪些企业") → search + LLM extract,
+//     because SQL LIKE '%公司%' returns garbage; the LLM understands the intent and
+//     extracts only the relevant entities from search results.
 func (srv *Server) handleAggregateIntent(w http.ResponseWriter, r *http.Request, question string) {
 	sqlStore, ok := srv.store.impl.(*store.SqliteStore)
-	if !ok { return }
+	if !ok {
+		return
+	}
 	db := sqlStore.DB()
-	var sb strings.Builder
-	sb.WriteString("根据记忆数据库的统计：\n\n**记忆总数**\n")
-	rows, _ := db.Query("SELECT phase, COUNT(*) FROM memories GROUP BY phase ORDER BY COUNT(*) DESC")
-	if rows != nil {
-		for rows.Next() { var p string; var c int; rows.Scan(&p, &c); sb.WriteString(fmt.Sprintf("- %s: %d 条\n", p, c)) }
-		rows.Close()
-	}
-	if strings.Contains(strings.ToLower(question), "项目") || strings.Contains(strings.ToLower(question), "project") {
-		sb.WriteString("\n**项目分布**\n")
-		prows, _ := db.Query("SELECT project, COUNT(*) FROM memories WHERE project != '' GROUP BY project ORDER BY COUNT(*) DESC LIMIT 20")
-		if prows != nil { for prows.Next() { var p string; var c int; prows.Scan(&p, &c); sb.WriteString(fmt.Sprintf("- %s: %d 条\n", p, c)) }; prows.Close() }
-	}
-	if regexp.MustCompile(`(哪些|所有|列出|什么)`).MatchString(question) {
-		for _, kw := range []string{"企业", "公司", "合同", "客户", "往来"} {
-			if strings.Contains(question, kw) {
-				sb.WriteString(fmt.Sprintf("\n**相关%s记录**\n", kw))
-				erows, _ := db.Query("SELECT DISTINCT substr(content, 1, 80) FROM memories WHERE content LIKE ? AND content NOT LIKE '%<system-reminder>%' LIMIT 20", "%"+kw+"%")
-				if erows != nil { cnt := 0; for erows.Next() { var c string; erows.Scan(&c); cnt++; sb.WriteString(fmt.Sprintf("%d. %s\n", cnt, c)) }; erows.Close() }
+	lower := strings.ToLower(question)
+
+	// Check if this is an entity-enumeration question (needs LLM) vs pure stats (SQL only).
+	isEntityQuery := regexp.MustCompile(`(什么|哪些|所有|列出)`).MatchString(question) &&
+		regexp.MustCompile(`(公司|企业|合同|客户|人|项目)`).MatchString(question)
+
+	if !isEntityQuery {
+		// Pure stats: SQL COUNT only.
+		var sb strings.Builder
+		sb.WriteString("根据记忆数据库的统计：\n\n**记忆总数**\n")
+		rows, _ := db.Query("SELECT phase, COUNT(*) FROM memories GROUP BY phase ORDER BY COUNT(*) DESC")
+		if rows != nil {
+			for rows.Next() {
+				var p string
+				var c int
+				rows.Scan(&p, &c)
+				sb.WriteString(fmt.Sprintf("- %s: %d 条\n", p, c))
+			}
+			rows.Close()
+		}
+		if strings.Contains(lower, "项目") || strings.Contains(lower, "project") {
+			sb.WriteString("\n**项目分布**\n")
+			prows, _ := db.Query("SELECT project, COUNT(*) FROM memories WHERE project != '' GROUP BY project ORDER BY COUNT(*) DESC LIMIT 20")
+			if prows != nil {
+				for prows.Next() {
+					var p string
+					var c int
+					prows.Scan(&p, &c)
+					sb.WriteString(fmt.Sprintf("- %s: %d 条\n", p, c))
+				}
+				prows.Close()
 			}
 		}
+		writeJSON(w, http.StatusOK, map[string]any{"answer": sb.String(), "sources": []any{}})
+		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"answer": sb.String(), "sources": []any{}})
+
+	// Entity enumeration: search for the entity keyword, then LLM extracts/summarizes.
+	// Determine the search keyword from the question.
+	searchKw := ""
+	for _, kw := range []string{"合同", "企业", "公司", "客户"} {
+		if strings.Contains(question, kw) {
+			searchKw = kw
+			break
+		}
+	}
+	if searchKw == "" {
+		searchKw = "项目"
+	}
+
+	// Search for memories matching the entity keyword (organized first, then inbox).
+	results, _ := srv.store.impl.Search(store.SearchOptions{
+		Query: searchKw,
+		Phase: store.PhaseOrganized,
+	})
+	inboxResults, _ := srv.store.impl.SearchLike(store.SearchOptions{
+		Query: searchKw,
+		Phase: store.PhaseInbox,
+	})
+	// Combine, organized first (denser), then inbox top results.
+	combined := append(results, inboxResults...)
+	if len(combined) > 30 {
+		combined = combined[:30]
+	}
+
+	if len(combined) == 0 {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"answer":  fmt.Sprintf("没有找到与%s相关的记忆。", searchKw),
+			"sources": []any{},
+		})
+		return
+	}
+
+	// LLM extraction: feed search results + original question, ask LLM to answer specifically.
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("用户的问题：%s\n\n", question))
+	sb.WriteString(fmt.Sprintf("以下是与%s相关的记忆记录（共%d条）。请根据这些记录直接回答用户的问题。\n", searchKw, len(combined)))
+	sb.WriteString("要求：只列出与问题直接相关的实体（公司名/合同/客户），不要列出无关内容。用中文回答。\n\n")
+	for i, m := range combined {
+		c := m.Content
+		if len(c) > 300 {
+			c = c[:300] + "..."
+		}
+		sb.WriteString(fmt.Sprintf("[%d] DATE: %s | %s\n", i+1, m.CreatedAt.Format("2006-01-02"), c))
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
+	defer cancel()
+	answer, err := srv.llm.Chat(ctx, sb.String())
+	if err != nil {
+		answer = fmt.Sprintf("找到 %d 条相关记录，但总结失败。", len(combined))
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"answer":  answer,
+		"sources": []any{},
+		"count":   len(combined),
+	})
 }
 
 // handleRelationIntent: co-occurrence search for "A和B什么关系".
