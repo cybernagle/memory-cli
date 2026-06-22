@@ -795,243 +795,26 @@ func (srv *Server) handleRelationIntent(w http.ResponseWriter, r *http.Request, 
 
 func (srv *Server) handleAsk(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Question string         `json:"question"`
-		History  []chatMessage  `json:"history"`
+		Question string        `json:"question"`
+		History  []chatMessage `json:"history"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Question == "" {
 		writeError(w, http.StatusBadRequest, "missing question")
 		return
 	}
 
-	// ── Intent dispatch ──
-	// 1. Time intent: "今天/昨天/上周/近7天/6月15到20号"
-	if dr, ok := detectTimeIntent(req.Question); ok {
-		srv.handleTimeIntentAsk(w, r, dr, req.Question)
-		return
-	}
-	// 2. Aggregate/list intent: "有多少记忆/有哪些项目/服务过哪些企业"
-	if detectAggregateIntent(req.Question) {
-		srv.handleAggregateIntent(w, r, req.Question)
-		return
-	}
-	// 3. Relation intent: "A和B什么关系"
-	if detectRelationIntent(req.Question) {
-		srv.handleRelationIntent(w, r, req.Question)
-		return
-	}
+	// Run the ask workflow pipeline (context resolve → intent → search → LLM).
+	answer, extra := runAskWorkflow(srv, r, req.Question, req.History)
 
-	// Build a search query that includes context from recent conversation. A follow-up like
-	// "有相关的时间记录吗？" is meaningless without the prior question ("juli landing 制作记录").
-	// We prepend the last user turn's keywords to give the search context.
-	searchInput := req.Question
-	if len(req.History) > 0 {
-		for i := len(req.History) - 1; i >= 0; i-- {
-			if req.History[i].Role == "user" && req.History[i].Content != req.Question {
-				searchInput = req.History[i].Content + " " + req.Question
-				break
-			}
-		}
-	}
-
-	// Extract search keywords via LLM. This replaces the brittle regex+stopword approach:
-	// the old extractSearchKeywords couldn't handle arbitrary Chinese questions because FTS5's
-	// unicode61 tokenizer has no CJK segmentation. The LLM understands any phrasing and returns
-	// clean keywords that FTS OR LIKE can match. Falls back to the raw question if LLM is down.
-	searchQuery := searchInput
-	if srv.llm != nil {
-		if kw, err := llmExtractKeywords(r.Context(), srv.llm, searchInput); err == nil && kw != "" {
-			searchQuery = kw
-		}
-	}
-
-	// Search inbox FIRST — it has the most complete raw data (organized memories are
-	// compressed summaries that may drop specific entities like company names). Then add
-	// organized/processed as supplements. This prevents a case where organized returns
-	// generic matches (e.g. "上海" matching 200 unrelated memories) while the real answer
-	// (e.g. "瑞福莱" only in inbox) gets crowded out.
-	// inbox uses SearchLike (IDF-ranked LIKE) — FTS OR on generic keywords like "上海"
-	// returns hundreds of irrelevant matches. The Store interface now declares SearchLike,
-	// so this works for both SqliteStore (real IDF ranking) and FileStore (fallback to Search).
-	inbox, _ := srv.store.impl.SearchLike(store.SearchOptions{
-		Query: searchQuery,
-		Phase: store.PhaseInbox,
-	})
-
-	// Search organized + processed as supplements.
-	results, err := srv.store.impl.Search(store.SearchOptions{
-		Query: searchQuery,
-		Phase: store.PhaseOrganized,
-	})
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "search failed: "+err.Error())
-		return
-	}
-	processed, _ := srv.store.impl.Search(store.SearchOptions{
-		Query: searchQuery,
-		Phase: store.PhaseProcessed,
-	})
-
-	// Allocate slots: inbox gets priority (it has the real data). If inbox has many results,
-	// give it more room and shrink organized.
-	const procLimit = 4
-	inboxLimit := 12
-	orgLimit := 6
-	if len(inbox) < 3 {
-		// Inbox has little — lean more on organized summaries.
-		inboxLimit = 6
-		orgLimit = 12
-	}
-	if len(results) > orgLimit {
-		results = results[:orgLimit]
-	}
-	if len(processed) > procLimit {
-		processed = processed[:procLimit]
-	}
-	// Inbox: take IDF-ranked top N directly. Do NOT re-sort or spreadByDate — that would
-	// destroy the IDF ranking and let common-keyword matches crowd out rare entities.
-	if len(inbox) > inboxLimit {
-		inbox = inbox[:inboxLimit]
-	}
-	results = append(results, processed...)
-	results = append(results, inbox...)
-
-	// Fallback: if current question found 0 results but there's conversation history,
-	// re-search using the PREVIOUS user question's keywords. This handles follow-ups like
-	// "具体的细节以及日期提供给我" which on their own extract generic keywords ("细节 OR 日期"),
-	// but in context are asking about the prior topic (e.g. "瑞福莱的合同").
-	if len(results) == 0 && len(req.History) > 0 && srv.llm != nil {
-		for i := len(req.History) - 1; i >= 0; i-- {
-			if req.History[i].Role == "user" {
-				prevQ := req.History[i].Content
-				if kw, err := llmExtractKeywords(r.Context(), srv.llm, prevQ); err == nil && kw != "" {
-					// Re-run all three phase searches with previous keywords.
-					results, _ = srv.store.impl.Search(store.SearchOptions{Query: kw, Phase: store.PhaseOrganized})
-					proc2, _ := srv.store.impl.Search(store.SearchOptions{Query: kw, Phase: store.PhaseProcessed})
-					inb2, _ := srv.store.impl.SearchLike(store.SearchOptions{Query: kw, Phase: store.PhaseInbox})
-					if len(inb2) > inboxLimit {
-						inb2 = inb2[:inboxLimit]
-					}
-					results = append(results, proc2...)
-					results = append(results, inb2...)
-					// Update searchQuery for snippet extraction.
-					searchQuery = kw
-				}
-				break
-			}
-		}
-	}
-
-	if len(results) == 0 {
-		writeJSON(w, http.StatusOK, map[string]any{
-			"answer":   "No relevant memories found for your question.",
-			"sources":  []any{},
-			"question": req.Question,
-		})
-		return
-	}
-
-	// Build context from memories. The DATE is the most important field for "when" questions,
-	// so it goes first and most prominent on each line. Inbox items carry the real event date;
-	// organized items carry the processing date (marked as such so the LLM doesn't confuse them).
-	var sb strings.Builder
-	// Parse keywords for snippet extraction (so we center the 300-char window on the
-	// keyword, not the start of the message — "瑞福莱" may be at char 500 of a thinking block).
-	snippetKWs := strings.Split(strings.ReplaceAll(strings.ToLower(searchQuery), " or ", "|"), "|")
-
-	for i, m := range results {
-		content := m.Content
-		if len(content) > 300 {
-			// Find the earliest keyword position and center the snippet around it.
-			bestPos := 0
-			contentLower := strings.ToLower(content)
-			for _, kw := range snippetKWs {
-				kw = strings.TrimSpace(kw)
-				if kw == "" {
-					continue
-				}
-				if idx := strings.Index(contentLower, kw); idx >= 0 {
-					if bestPos == 0 || idx < bestPos {
-						bestPos = idx
-					}
-				}
-			}
-			// Center a 300-char window on bestPos (clamp to bounds).
-			start := bestPos - 80
-			if start < 0 {
-				start = 0
-			}
-			end := start + 300
-			if end > len(content) {
-				end = len(content)
-			}
-			content = content[start:end]
-			if start > 0 {
-				content = "..." + content
-			}
-			if end < len(m.Content) {
-				content = content + "..."
-			}
-		}
-		dateStr := m.CreatedAt.Format("2006-01-02")
-		// Mark organized dates as processing-time so the LLM distinguishes them from event dates.
-		if m.Phase == store.PhaseOrganized || m.Phase == store.PhaseProcessed {
-			dateStr = "(processed " + dateStr + ")"
-		}
-		sb.WriteString(fmt.Sprintf("\n[%d] DATE: %s | %s", i+1, dateStr, content))
-		sb.WriteString("\n")
-	}
-
-	// Compute the real date range from inbox items (the actual event timespan).
-	var earliestDate, latestDate string
-	for _, m := range inbox {
-		d := m.CreatedAt.Format("2006-01-02")
-		if earliestDate == "" || d < earliestDate {
-			earliestDate = d
-		}
-		if latestDate == "" || d > latestDate {
-			latestDate = d
-		}
-	}
-
-	prompt := fmt.Sprintf(`You are a memory assistant. Answer the user's question based ONLY on the following memories.
-
-CRITICAL — DATES: Each memory line starts with "DATE: YYYY-MM-DD". These are the real dates when things happened. The actual time span of this topic is %s to %s. When asked about timing, you MUST cite specific dates from the memories. Do NOT say "no date information" — the dates are right there at the start of each line. Memories marked "(processed YYYY-MM-DD)" are summaries — their dates are when the summary was generated, not when the event happened; prefer the plain dates.
-
-User's memories:
-%s
-
-Question: %s
-
-Answer concisely in the same language as the question:`, earliestDate, latestDate, sb.String(), req.Question)
-
-	if srv.llm == nil {
-		// Fallback: return raw search results
-		writeJSON(w, http.StatusOK, map[string]any{
-			"answer":   "LLM not available. Here are the relevant memories:\n\n" + formatMemoryList(results[:min(10, len(results))]),
-			"sources":  toSources(results[:min(10, len(results))]),
-			"question": req.Question,
-		})
-		return
-	}
-
-	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
-	defer cancel()
-
-	resp, err := srv.llm.Chat(ctx, prompt)
-	if err != nil {
-		writeJSON(w, http.StatusOK, map[string]any{
-			"answer":   "LLM error: " + err.Error(),
-			"sources":  toSources(results[:min(5, len(results))]),
-			"question": req.Question,
-		})
-		return
-	}
-
-	writeJSON(w, http.StatusOK, map[string]any{
-		"answer":   resp,
-		"sources":  toSources(results[:min(10, len(results))]),
+	response := map[string]any{
+		"answer":   answer,
+		"sources":  []any{},
 		"question": req.Question,
-	})
+	}
+	for k, v := range extra {
+		response[k] = v
+	}
+	writeJSON(w, http.StatusOK, response)
 }
 
 func formatMemoryList(mems []*store.Memory) string {
