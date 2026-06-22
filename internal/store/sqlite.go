@@ -83,6 +83,7 @@ func (s *SqliteStore) init() error {
 	// Migrate: add tmux_session column for provenance by tmux session (the writer process
 	// runs inside tmux, so $TMUX is set). Idempotent ALTER — error discarded on re-run.
 	s.db.Exec("ALTER TABLE memories ADD COLUMN tmux_session TEXT")
+	s.db.Exec("UPDATE memories SET tmux_session = '' WHERE tmux_session IS NULL")
 	s.db.Exec("CREATE INDEX IF NOT EXISTS idx_memories_tmux ON memories(tmux_session)")
 
 	// Migrate: add consumed_mask (bitmask of consumers that have processed this memory).
@@ -1248,11 +1249,15 @@ func scanMemoryRow(rows *sql.Rows) (*Memory, error) {
 	var expiresAt sql.NullString
 	var processedBy string
 	var metadataStr string
+	var tmuxSession sql.NullString
 	err := rows.Scan(&mem.ID, &mem.Content, &mem.ContentHash, &phase, &category,
-		&scope, &source, &sessionID, &createdAt, &updatedAt, &expiresAt, &mem.AccessCount, &mem.Version, &processedBy, &project, &mem.TmuxSession, &mem.ConsumedMask,
+		&scope, &source, &sessionID, &createdAt, &updatedAt, &expiresAt, &mem.AccessCount, &mem.Version, &processedBy, &project, &tmuxSession, &mem.ConsumedMask,
 		&mem.MessageUUID, &mem.ParentUUID, &mem.Role, &mem.GitBranch, &mem.Model, &mem.PromptID, &metadataStr)
 	if err != nil {
 		return nil, err
+	}
+	if tmuxSession.Valid {
+		mem.TmuxSession = tmuxSession.String
 	}
 	mem.Phase = Phase(phase)
 	mem.Category = Category(category)
@@ -1285,11 +1290,15 @@ func scanMemoryRowSingle(row *sql.Row) (*Memory, error) {
 	var expiresAt sql.NullString
 	var processedBy string
 	var metadataStr string
+	var tmuxSession sql.NullString
 	err := row.Scan(&mem.ID, &mem.Content, &mem.ContentHash, &phase, &category,
-		&scope, &source, &sessionID, &createdAt, &updatedAt, &expiresAt, &mem.AccessCount, &mem.Version, &processedBy, &project, &mem.TmuxSession, &mem.ConsumedMask,
+		&scope, &source, &sessionID, &createdAt, &updatedAt, &expiresAt, &mem.AccessCount, &mem.Version, &processedBy, &project, &tmuxSession, &mem.ConsumedMask,
 		&mem.MessageUUID, &mem.ParentUUID, &mem.Role, &mem.GitBranch, &mem.Model, &mem.PromptID, &metadataStr)
 	if err != nil {
 		return nil, err
+	}
+	if tmuxSession.Valid {
+		mem.TmuxSession = tmuxSession.String
 	}
 	mem.Phase = Phase(phase)
 	mem.Category = Category(category)
