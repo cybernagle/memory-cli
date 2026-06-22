@@ -606,11 +606,17 @@ func detectTimeIntent(question string) (*dateRange, bool) {
 	return nil, false
 }
 
-// detectAggregateIntent: "有多少" / "有哪些" / "哪些" / "列出" / "how many"
+// detectAggregateIntent: "有多少" / "有哪些" / "哪些" / "列出" / "什么公司" / "什么企业"
 func detectAggregateIntent(question string) bool {
 	lower := strings.ToLower(question)
-	for _, w := range []string{"多少", "几个", "几条", "总数", "how many", "count", "统计", "有哪些", "哪些", "所有", "列出"} {
-		if strings.Contains(lower, w) { return true }
+	for _, w := range []string{"多少", "几个", "几条", "总数", "how many", "count", "统计", "有哪些", "哪些", "所有", "列出", "什么公司", "什么企业", "哪些公司", "哪些企业", "哪些合同"} {
+		if strings.Contains(lower, w) {
+			return true
+		}
+	}
+	// "什么X" pattern where X is an entity type (公司/企业/合同/项目/客户)
+	if regexp.MustCompile(`什么(公司|企业|合同|项目|客户|人)`).MatchString(question) {
+		return true
 	}
 	return false
 }
@@ -664,8 +670,8 @@ func (srv *Server) handleAggregateIntent(w http.ResponseWriter, r *http.Request,
 		prows, _ := db.Query("SELECT project, COUNT(*) FROM memories WHERE project != '' GROUP BY project ORDER BY COUNT(*) DESC LIMIT 20")
 		if prows != nil { for prows.Next() { var p string; var c int; prows.Scan(&p, &c); sb.WriteString(fmt.Sprintf("- %s: %d 条\n", p, c)) }; prows.Close() }
 	}
-	if regexp.MustCompile(`(哪些|所有|列出)`).MatchString(question) {
-		for _, kw := range []string{"企业", "公司", "合同"} {
+	if regexp.MustCompile(`(哪些|所有|列出|什么)`).MatchString(question) {
+		for _, kw := range []string{"企业", "公司", "合同", "客户", "往来"} {
 			if strings.Contains(question, kw) {
 				sb.WriteString(fmt.Sprintf("\n**相关%s记录**\n", kw))
 				erows, _ := db.Query("SELECT DISTINCT substr(content, 1, 80) FROM memories WHERE content LIKE ? AND content NOT LIKE '%<system-reminder>%' LIMIT 20", "%"+kw+"%")
