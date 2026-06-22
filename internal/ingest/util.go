@@ -3,6 +3,7 @@ package ingest
 import (
 	"log"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 )
@@ -84,4 +85,16 @@ func CurrentProject() string {
 		return ""
 	}
 	return ProjectFromCwd(cwd)
+}
+
+// CurrentTmuxSession returns the tmux session name the process is running in, or "" if not in tmux.
+func CurrentTmuxSession() string {
+	if os.Getenv("TMUX") == "" {
+		return ""
+	}
+	out, err := exec.Command("tmux", "display-message", "-p", "#S").Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
 }

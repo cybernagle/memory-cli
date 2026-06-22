@@ -13,9 +13,9 @@ func TestPromptHash(t *testing.T) {
 	if promptHash("car-agent question") == promptHash("makro question") {
 		t.Error("different prompts must hash differently")
 	}
-	// 8 hex chars
-	if len(h1) != 8 {
-		t.Errorf("promptHash len = %d, want 8", len(h1))
+	// 16 hex chars (full 64-bit FNV)
+	if len(h1) != 16 {
+		t.Errorf("promptHash len = %d, want 16", len(h1))
 	}
 	// empty → empty (caller omits hash)
 	if promptHash("") != "" {

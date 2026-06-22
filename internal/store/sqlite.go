@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log"
 	"math"
 	"sort"
 	"strings"
@@ -79,6 +80,11 @@ func (s *SqliteStore) init() error {
 	s.db.Exec("UPDATE memories SET project = '' WHERE project IS NULL")
 	s.db.Exec("CREATE INDEX IF NOT EXISTS idx_memories_project ON memories(project)")
 
+	// Migrate: add tmux_session column for provenance by tmux session (the writer process
+	// runs inside tmux, so $TMUX is set). Idempotent ALTER — error discarded on re-run.
+	s.db.Exec("ALTER TABLE memories ADD COLUMN tmux_session TEXT")
+	s.db.Exec("CREATE INDEX IF NOT EXISTS idx_memories_tmux ON memories(tmux_session)")
+
 	// Migrate: add consumed_mask (bitmask of consumers that have processed this memory).
 	// Each consumer owns a bit; marking is a single atomic `mask | bit` UPDATE.
 	s.db.Exec("ALTER TABLE memories ADD COLUMN consumed_mask INTEGER NOT NULL DEFAULT 0")
@@ -139,7 +145,7 @@ func (s *SqliteStore) migrateLinksTable() {
 	s.db.Exec("PRAGMA foreign_keys=ON")
 }
 
-func (s *SqliteStore) WriteToInbox(content string, scope string, tags []string, source string, project string) (*Memory, error) {
+func (s *SqliteStore) WriteToInbox(content string, scope string, tags []string, source string, project string, tmuxSession string) (*Memory, error) {
 	now := time.Now()
 	ttl, err := parseDuration("168h")
 	if err != nil {
@@ -156,6 +162,7 @@ func (s *SqliteStore) WriteToInbox(content string, scope string, tags []string, 
 		Tags:        tags,
 		Source:      defaultString(source, "manual"),
 		Project:     project,
+		TmuxSession: tmuxSession,
 		CreatedAt:   now,
 		UpdatedAt:   now,
 		ExpiresAt:   &expires,
@@ -219,7 +226,7 @@ func (s *SqliteStore) Delete(id string) error {
 }
 
 func (s *SqliteStore) List(opts ListOptions) ([]*Memory, error) {
-	query := "SELECT id, content, content_hash, phase, category, scope, source, session_id, created_at, updated_at, expires_at, access_count, version, processed_by, project, consumed_mask, message_uuid, parent_uuid, role, git_branch, model, prompt_id, metadata FROM memories WHERE 1=1"
+	query := "SELECT id, content, content_hash, phase, category, scope, source, session_id, created_at, updated_at, expires_at, access_count, version, processed_by, project, tmux_session, consumed_mask, message_uuid, parent_uuid, role, git_branch, model, prompt_id, metadata FROM memories WHERE 1=1"
 	var args []any
 
 	if opts.Category != "" {
@@ -405,9 +412,18 @@ func (s *SqliteStore) MarkConsumed(id string, processorName string) error {
 	if !ok {
 		return nil
 	}
-	_, err := s.db.Exec("UPDATE memories SET consumed_mask = consumed_mask | ?, updated_at = ? WHERE id = ?",
+	res, err := s.db.Exec("UPDATE memories SET consumed_mask = consumed_mask | ?, updated_at = ? WHERE id = ?",
 		int64(c), time.Now().Format(time.RFC3339), id)
-	return err
+	if err != nil {
+		return err
+	}
+	// Log a no-op so a stale/deleted id doesn't fail silently. Still idempotent: re-marking an
+	// already-consumed row updates 1 row (the bit is already set but updated_at flips), so this
+	// only fires for genuinely-missing ids.
+	if n, _ := res.RowsAffected(); n == 0 {
+		log.Printf("[store] MarkConsumed(%s, %s): no rows matched (id missing or deleted)", id, processorName)
+	}
+	return nil
 }
 
 func (s *SqliteStore) ListUnconsumed(processorName string) ([]*Memory, error) {
@@ -415,9 +431,14 @@ func (s *SqliteStore) ListUnconsumed(processorName string) ([]*Memory, error) {
 	if !ok {
 		return nil, nil
 	}
+	// TODO(code-review): phase='inbox' is hardcoded. This is intentional for the fact-processor
+	// flow (inbox → processed is the only path the plugin pipeline consumes), but it means a
+	// processor registered for processed/organized memories would never see them here. If a
+	// future processor needs a non-inbox phase, parameterize the phase filter rather than
+	// loosening this default.
 	rows, err := s.db.Query(`
 		SELECT id, content, content_hash, phase, category, scope, source, session_id,
-		       created_at, updated_at, expires_at, access_count, version, processed_by, project, consumed_mask,
+		       created_at, updated_at, expires_at, access_count, version, processed_by, project, tmux_session, consumed_mask,
 		       message_uuid, parent_uuid, role, git_branch, model, prompt_id, metadata
 		FROM memories
 		WHERE phase = 'inbox' AND (consumed_mask & ?) = 0
@@ -462,7 +483,7 @@ func (s *SqliteStore) ListUnconsumed(processorName string) ([]*Memory, error) {
 
 func (s *SqliteStore) FindByID(id string) (*Memory, error) {
 	row := s.db.QueryRow(
-		"SELECT id, content, content_hash, phase, category, scope, source, session_id, created_at, updated_at, expires_at, access_count, version, processed_by, project, consumed_mask, message_uuid, parent_uuid, role, git_branch, model, prompt_id, metadata FROM memories WHERE id = ?",
+		"SELECT id, content, content_hash, phase, category, scope, source, session_id, created_at, updated_at, expires_at, access_count, version, processed_by, project, tmux_session, consumed_mask, message_uuid, parent_uuid, role, git_branch, model, prompt_id, metadata FROM memories WHERE id = ?",
 		id)
 	mem, err := scanMemoryRowSingle(row)
 	if err != nil {
@@ -486,7 +507,7 @@ func (s *SqliteStore) FindByID(id string) (*Memory, error) {
 
 func (s *SqliteStore) FindByHash(hash string) (*Memory, error) {
 	row := s.db.QueryRow(
-		"SELECT id, content, content_hash, phase, category, scope, source, session_id, created_at, updated_at, expires_at, access_count, version, processed_by, project, consumed_mask, message_uuid, parent_uuid, role, git_branch, model, prompt_id, metadata FROM memories WHERE content_hash = ?",
+		"SELECT id, content, content_hash, phase, category, scope, source, session_id, created_at, updated_at, expires_at, access_count, version, processed_by, project, tmux_session, consumed_mask, message_uuid, parent_uuid, role, git_branch, model, prompt_id, metadata FROM memories WHERE content_hash = ?",
 		hash)
 	mem, err := scanMemoryRowSingle(row)
 	if err != nil {
@@ -516,7 +537,7 @@ func (s *SqliteStore) Search(opts SearchOptions) ([]*Memory, error) {
 	// Building the WHERE dynamically so each set filter is a real indexed predicate.
 	query := `
 		SELECT m.id, m.content, m.content_hash, m.phase, m.category, m.scope, m.source,
-		       m.session_id, m.created_at, m.updated_at, m.expires_at, m.access_count, m.version, m.processed_by, m.project, m.consumed_mask,
+		       m.session_id, m.created_at, m.updated_at, m.expires_at, m.access_count, m.version, m.processed_by, m.project, m.tmux_session, m.consumed_mask,
 		       m.message_uuid, m.parent_uuid, m.role, m.git_branch, m.model, m.prompt_id, m.metadata
 		FROM memories m
 		WHERE m.id IN (
@@ -563,20 +584,41 @@ func (s *SqliteStore) Search(opts SearchOptions) ([]*Memory, error) {
 func (s *SqliteStore) searchFTS(opts SearchOptions, bm25 bool) ([]*Memory, error) {
 	query := `
 		SELECT m.id, m.content, m.content_hash, m.phase, m.category, m.scope, m.source,
-		       m.session_id, m.created_at, m.updated_at, m.expires_at, m.access_count, m.version, m.processed_by, m.project, m.consumed_mask,
+		       m.session_id, m.created_at, m.updated_at, m.expires_at, m.access_count, m.version, m.processed_by, m.project, m.tmux_session, m.consumed_mask,
 		       m.message_uuid, m.parent_uuid, m.role, m.git_branch, m.model, m.prompt_id, m.metadata
 		FROM memories m
 		WHERE m.id IN (
 			SELECT memory_id FROM memories_fts WHERE memories_fts MATCH ?
 		)`
 	args := []interface{}{opts.Query}
-	if opts.Phase != "" { query += " AND m.phase = ?"; args = append(args, string(opts.Phase)) }
-	if opts.Scope != "" { query += " AND m.scope = ?"; args = append(args, opts.Scope) }
-	if opts.Project != "" { query += " AND m.project = ?"; args = append(args, opts.Project) }
-	if opts.SessionID != "" { query += " AND m.session_id = ?"; args = append(args, opts.SessionID) }
-	if opts.Category != "" { query += " AND m.category = ?"; args = append(args, string(opts.Category)) }
-	if opts.From != nil { query += " AND m.created_at >= ?"; args = append(args, opts.From.Format(time.RFC3339)) }
-	if opts.To != nil { query += " AND m.created_at <= ?"; args = append(args, opts.To.Format(time.RFC3339)) }
+	if opts.Phase != "" {
+		query += " AND m.phase = ?"
+		args = append(args, string(opts.Phase))
+	}
+	if opts.Scope != "" {
+		query += " AND m.scope = ?"
+		args = append(args, opts.Scope)
+	}
+	if opts.Project != "" {
+		query += " AND m.project = ?"
+		args = append(args, opts.Project)
+	}
+	if opts.SessionID != "" {
+		query += " AND m.session_id = ?"
+		args = append(args, opts.SessionID)
+	}
+	if opts.Category != "" {
+		query += " AND m.category = ?"
+		args = append(args, string(opts.Category))
+	}
+	if opts.From != nil {
+		query += " AND m.created_at >= ?"
+		args = append(args, opts.From.Format(time.RFC3339))
+	}
+	if opts.To != nil {
+		query += " AND m.created_at <= ?"
+		args = append(args, opts.To.Format(time.RFC3339))
+	}
 	if bm25 {
 		query = strings.Replace(query,
 			"SELECT memory_id FROM memories_fts WHERE memories_fts MATCH ?",
@@ -595,7 +637,9 @@ func (s *SqliteStore) searchFTS(opts SearchOptions, bm25 bool) ([]*Memory, error
 	var ids []string
 	for rows.Next() {
 		mem, err := scanMemoryRow(rows)
-		if err != nil { continue }
+		if err != nil {
+			continue
+		}
 		results = append(results, mem)
 		ids = append(ids, mem.ID)
 	}
@@ -607,9 +651,13 @@ func (s *SqliteStore) searchFTS(opts SearchOptions, bm25 bool) ([]*Memory, error
 	linkMap, _ := s.batchLoadLinks(ids)
 	for _, mem := range results {
 		mem.Tags = tagMap[mem.ID]
-		if mem.Tags == nil { mem.Tags = []string{} }
+		if mem.Tags == nil {
+			mem.Tags = []string{}
+		}
 		mem.Links = linkMap[mem.ID]
-		if mem.Links == nil { mem.Links = []string{} }
+		if mem.Links == nil {
+			mem.Links = []string{}
+		}
 	}
 	results = s.filterSearch(results, opts)
 	return results, nil
@@ -836,7 +884,7 @@ func (s *SqliteStore) ResolveBacklinks() (int, error) {
 func (s *SqliteStore) GetBacklinks(id string) ([]*Memory, error) {
 	rows, err := s.db.Query(`
 		SELECT m.id, m.content, m.content_hash, m.phase, m.category, m.scope, m.source,
-		       m.session_id, m.created_at, m.updated_at, m.expires_at, m.access_count, m.version, m.processed_by, m.project, m.consumed_mask,
+		       m.session_id, m.created_at, m.updated_at, m.expires_at, m.access_count, m.version, m.processed_by, m.project, m.tmux_session, m.consumed_mask,
 		       m.message_uuid, m.parent_uuid, m.role, m.git_branch, m.model, m.prompt_id, m.metadata
 		FROM links l
 		JOIN memories m ON m.id = l.source_id
@@ -1014,6 +1062,7 @@ func (s *SqliteStore) InsertMemory(mem *Memory) error {
 		if _, err = tx.Exec(`UPDATE memories SET
 				session_id   = CASE WHEN session_id   = '' AND ? != '' THEN ? ELSE session_id END,
 				project      = CASE WHEN project      = '' AND ? != '' THEN ? ELSE project END,
+				tmux_session = CASE WHEN tmux_session = '' AND ? != '' THEN ? ELSE tmux_session END,
 				message_uuid = CASE WHEN message_uuid = '' AND ? != '' THEN ? ELSE message_uuid END,
 				parent_uuid  = CASE WHEN parent_uuid  = '' AND ? != '' THEN ? ELSE parent_uuid END,
 				role         = CASE WHEN role         = '' AND ? != '' THEN ? ELSE role END,
@@ -1023,6 +1072,7 @@ func (s *SqliteStore) InsertMemory(mem *Memory) error {
 			WHERE id = ?`,
 			mem.SessionID, mem.SessionID,
 			mem.Project, mem.Project,
+			mem.TmuxSession, mem.TmuxSession,
 			mem.MessageUUID, mem.MessageUUID,
 			mem.ParentUUID, mem.ParentUUID,
 			mem.Role, mem.Role,
@@ -1047,12 +1097,12 @@ func (s *SqliteStore) InsertMemory(mem *Memory) error {
 	}
 	// No existing memory (or query error) → fall through to a fresh INSERT.
 
-	_, err = tx.Exec(`INSERT INTO memories (id, content, content_hash, phase, category, scope, source, session_id, created_at, updated_at, expires_at, access_count, version, processed_by, raw_entry_id, project, consumed_mask, message_uuid, parent_uuid, role, git_branch, model, prompt_id, metadata)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+	_, err = tx.Exec(`INSERT INTO memories (id, content, content_hash, phase, category, scope, source, session_id, created_at, updated_at, expires_at, access_count, version, processed_by, raw_entry_id, project, tmux_session, consumed_mask, message_uuid, parent_uuid, role, git_branch, model, prompt_id, metadata)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		mem.ID, mem.Content, mem.ContentHash, string(mem.Phase), string(categoryVal),
 		mem.Scope, mem.Source, mem.SessionID,
 		mem.CreatedAt.Format(time.RFC3339), mem.UpdatedAt.Format(time.RFC3339),
-		formatTime(mem.ExpiresAt), mem.AccessCount, mem.Version, string(pbData), rawHash, mem.Project, mem.ConsumedMask,
+		formatTime(mem.ExpiresAt), mem.AccessCount, mem.Version, string(pbData), rawHash, mem.Project, mem.TmuxSession, mem.ConsumedMask,
 		mem.MessageUUID, mem.ParentUUID, mem.Role, mem.GitBranch, mem.Model, mem.PromptID, metadataJSON(mem.Metadata))
 	if err != nil {
 		tx.Rollback()
@@ -1199,7 +1249,7 @@ func scanMemoryRow(rows *sql.Rows) (*Memory, error) {
 	var processedBy string
 	var metadataStr string
 	err := rows.Scan(&mem.ID, &mem.Content, &mem.ContentHash, &phase, &category,
-		&scope, &source, &sessionID, &createdAt, &updatedAt, &expiresAt, &mem.AccessCount, &mem.Version, &processedBy, &project, &mem.ConsumedMask,
+		&scope, &source, &sessionID, &createdAt, &updatedAt, &expiresAt, &mem.AccessCount, &mem.Version, &processedBy, &project, &mem.TmuxSession, &mem.ConsumedMask,
 		&mem.MessageUUID, &mem.ParentUUID, &mem.Role, &mem.GitBranch, &mem.Model, &mem.PromptID, &metadataStr)
 	if err != nil {
 		return nil, err
@@ -1236,7 +1286,7 @@ func scanMemoryRowSingle(row *sql.Row) (*Memory, error) {
 	var processedBy string
 	var metadataStr string
 	err := row.Scan(&mem.ID, &mem.Content, &mem.ContentHash, &phase, &category,
-		&scope, &source, &sessionID, &createdAt, &updatedAt, &expiresAt, &mem.AccessCount, &mem.Version, &processedBy, &project, &mem.ConsumedMask,
+		&scope, &source, &sessionID, &createdAt, &updatedAt, &expiresAt, &mem.AccessCount, &mem.Version, &processedBy, &project, &mem.TmuxSession, &mem.ConsumedMask,
 		&mem.MessageUUID, &mem.ParentUUID, &mem.Role, &mem.GitBranch, &mem.Model, &mem.PromptID, &metadataStr)
 	if err != nil {
 		return nil, err
@@ -1290,7 +1340,6 @@ func (s *SqliteStore) IngestMemory(mem *Memory) error {
 	}
 	return s.InsertMemory(mem)
 }
-
 
 // metadataJSON serializes a Memory's Metadata map to a JSON string for storage.
 // Returns "{}" for nil/empty maps so the column is always valid JSON.

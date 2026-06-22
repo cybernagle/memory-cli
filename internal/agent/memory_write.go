@@ -50,7 +50,7 @@ func (t *MemoryWriteTool) Execute(ctx context.Context, params map[string]any) (T
 	var mem *store.Memory
 	var err error
 
-	mem, err = t.store.WriteToInbox(content, scope, tags, source, ingest.CurrentProject())
+	mem, err = t.store.WriteToInbox(content, scope, tags, source, ingest.CurrentProject(), ingest.CurrentTmuxSession())
 	if err != nil {
 		return ErrResult(fmt.Sprintf("write failed: %v", err)), err
 	}

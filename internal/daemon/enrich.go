@@ -35,9 +35,14 @@ func (t *EnrichTagsTask) Run(s store.Store) (int, error) {
 		return 0, err
 	}
 
-	// Pick memories not yet consumed by enrich-tags (any phase), up to the per-tick cap.
+	// Pick settled memories (processed + organized) not yet consumed by enrich-tags, up to the
+	// per-tick cap. Transient inbox memories are skipped: the fact-processor will re-extract
+	// them anyway, so concept-tagging them now just wastes LLM calls.
 	var pending []*store.Memory
 	for _, m := range all {
+		if m.Phase == store.PhaseInbox {
+			continue
+		}
 		if store.IsConsumedByMemory(m, "enrich-tags") {
 			continue
 		}

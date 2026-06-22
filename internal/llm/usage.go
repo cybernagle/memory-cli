@@ -76,6 +76,17 @@ func openUsageDB() (*sql.DB, error) {
 		return nil, err
 	}
 	db.SetMaxOpenConns(2) // tiny write-mostly log; keep it lean
+	// WAL + busy_timeout mirror the memory store (internal/store/sqlite_schema.go). The shared
+	// prompt_usage.db is written concurrently by memory-cli and the Makro app; without these
+	// PRAGMAs concurrent writers see SQLITE_BUSY and silently drop rows.
+	if _, err := db.Exec("PRAGMA journal_mode=WAL;"); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if _, err := db.Exec("PRAGMA busy_timeout=5000;"); err != nil {
+		db.Close()
+		return nil, err
+	}
 	if _, err := db.Exec(promptUsageSchema); err != nil {
 		db.Close()
 		return nil, err
@@ -117,9 +128,13 @@ func checkFrequency(db *sql.DB, fn string) {
 		).Scan(&n)
 		return n
 	}
+	// Two independent windows: when the 1-min threshold fires we still want to see the 5-min
+	// sustained-abuse signal in the same log line. The previous `else if` suppressed the long
+	// window whenever the short window triggered, hiding burst patterns.
 	if n := countSince(freqWindowShort); n > int64(freqLimitShort) {
 		log.Printf("[prompt-usage] ⚠ OVER-FREQUENCY: %s called %d times in the last minute (limit %d)", fn, n, freqLimitShort)
-	} else if n := countSince(freqWindowLong); n > int64(freqLimitLong) {
+	}
+	if n := countSince(freqWindowLong); n > int64(freqLimitLong) {
 		log.Printf("[prompt-usage] ⚠ OVER-FREQUENCY: %s called %d times in the last 5 minutes (limit %d)", fn, n, freqLimitLong)
 	}
 }
@@ -190,8 +205,9 @@ func recordLLMCall(fnName, model, prompt, label string, result *chatResult, err 
 	})
 }
 
-// promptHash returns a short stable fingerprint of a prompt (first 8 hex chars of FNV-1a).
-// Empty for empty input. Used only to distinguish calls — not security-sensitive.
+// promptHash returns a short stable fingerprint of a prompt (full 64-bit FNV-1a, 16 hex chars).
+// Empty for empty input. Used only to distinguish calls — not security-sensitive. The full
+// 64-bit width avoids the collisions the previous 32-bit mask suffered on long prompts.
 func promptHash(prompt string) string {
 	if prompt == "" {
 		return ""
@@ -203,7 +219,7 @@ func promptHash(prompt string) string {
 		h ^= uint64(prompt[i])
 		h *= prime64
 	}
-	return fmt.Sprintf("%08x", h&0xFFFFFFFF) // mask to 32 bits → exactly 8 hex chars
+	return fmt.Sprintf("%016x", h) // full 64-bit FNV → exactly 16 hex chars
 }
 
 // UsageStat is a per-dimension (function or model) usage rollup.

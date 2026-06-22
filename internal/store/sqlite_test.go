@@ -43,7 +43,7 @@ func TestSqliteWriteAndRead(t *testing.T) {
 func TestSqliteWriteToInbox(t *testing.T) {
 	s := tempSqliteStore(t)
 
-	mem, err := s.WriteToInbox("inbox item", "global", []string{"tag1"}, "test", "")
+	mem, err := s.WriteToInbox("inbox item", "global", []string{"tag1"}, "test", "", "")
 	if err != nil {
 		t.Fatalf("write to inbox: %v", err)
 	}
@@ -148,7 +148,7 @@ func TestSqliteTag(t *testing.T) {
 func TestSqliteUpgrade(t *testing.T) {
 	s := tempSqliteStore(t)
 
-	mem, _ := s.WriteToInbox("upgrade me", "global", nil, "test", "")
+	mem, _ := s.WriteToInbox("upgrade me", "global", nil, "test", "", "")
 	if mem.Phase != PhaseInbox {
 		t.Fatal("expected inbox phase")
 	}
@@ -213,7 +213,7 @@ func TestSqliteLinks(t *testing.T) {
 func TestSqliteExpiry(t *testing.T) {
 	s := tempSqliteStore(t)
 
-	mem, _ := s.WriteToInbox("expiring soon", "global", nil, "test", "")
+	mem, _ := s.WriteToInbox("expiring soon", "global", nil, "test", "", "")
 	mem.ExpiresAt = timePtr(time.Now().Add(-1 * time.Hour))
 	s.db.Exec("UPDATE memories SET expires_at = ? WHERE id = ?",
 		mem.ExpiresAt.Format(time.RFC3339), mem.ID)
@@ -266,7 +266,7 @@ func TestInsertMemoryRecordsRawEntry(t *testing.T) {
 		t.Fatalf("raw_entries not empty at start: %d", before)
 	}
 
-	mem, err := s.WriteToInbox("a fragment to remember", "global", []string{"x"}, "claude", "")
+	mem, err := s.WriteToInbox("a fragment to remember", "global", []string{"x"}, "claude", "", "")
 	if err != nil {
 		t.Fatalf("write: %v", err)
 	}
@@ -294,10 +294,10 @@ func TestRawEntryDedup(t *testing.T) {
 	s := tempSqliteStore(t)
 
 	// Same content written via two different paths must produce one raw entry.
-	if _, err := s.WriteToInbox("duplicate content", "global", nil, "claude", ""); err != nil {
+	if _, err := s.WriteToInbox("duplicate content", "global", nil, "claude", "", ""); err != nil {
 		t.Fatalf("write 1: %v", err)
 	}
-	if _, err := s.WriteToInbox("duplicate content", "global", nil, "manual", ""); err != nil {
+	if _, err := s.WriteToInbox("duplicate content", "global", nil, "manual", "", ""); err != nil {
 		t.Fatalf("write 2: %v", err)
 	}
 
@@ -313,7 +313,7 @@ func TestRawEntryDedup(t *testing.T) {
 func TestDeletePreservesRawEntry(t *testing.T) {
 	s := tempSqliteStore(t)
 
-	mem, err := s.WriteToInbox("must survive deletion", "global", nil, "claude", "")
+	mem, err := s.WriteToInbox("must survive deletion", "global", nil, "claude", "", "")
 	if err != nil {
 		t.Fatalf("write: %v", err)
 	}
@@ -396,7 +396,7 @@ func TestInitBackfillsRawEntries(t *testing.T) {
 func TestInsertMemoryAddsKeywordTags(t *testing.T) {
 	s := tempSqliteStore(t)
 
-	mem, err := s.WriteToInbox("We need state-management for the frontend using react and golang", "global", []string{"user-tag"}, "manual", "")
+	mem, err := s.WriteToInbox("We need state-management for the frontend using react and golang", "global", []string{"user-tag"}, "manual", "", "")
 	if err != nil {
 		t.Fatalf("write: %v", err)
 	}
@@ -425,7 +425,7 @@ func TestInsertMemoryAutoCategorizes(t *testing.T) {
 	s := tempSqliteStore(t)
 
 	// preference cue → preferences (read from DB; returned struct keeps the input category)
-	mem, err := s.WriteToInbox("I prefer dark theme for the code editor", "global", nil, "manual", "")
+	mem, err := s.WriteToInbox("I prefer dark theme for the code editor", "global", nil, "manual", "", "")
 	if err != nil {
 		t.Fatalf("write: %v", err)
 	}
@@ -435,7 +435,7 @@ func TestInsertMemoryAutoCategorizes(t *testing.T) {
 	}
 
 	// technical content → knowledge
-	mem2, _ := s.WriteToInbox("the golang api returns json over http", "global", nil, "manual", "")
+	mem2, _ := s.WriteToInbox("the golang api returns json over http", "global", nil, "manual", "", "")
 	got2, _ := s.Read(mem2.ID)
 	if got2.Category != CategoryKnowledge {
 		t.Errorf("technical content category = %q, want knowledge", got2.Category)
@@ -453,13 +453,13 @@ func TestInsertMemoryAutoCategorizes(t *testing.T) {
 func TestInsertMemoryProjectPersistence(t *testing.T) {
 	s := tempSqliteStore(t)
 
-	if _, err := s.WriteToInbox("makro feature note", "global", nil, "conversations", "makro"); err != nil {
+	if _, err := s.WriteToInbox("makro feature note", "global", nil, "conversations", "makro", ""); err != nil {
 		t.Fatalf("write makro: %v", err)
 	}
-	if _, err := s.WriteToInbox("fingersaver chat", "global", nil, "fingersaver", "fingersaver"); err != nil {
+	if _, err := s.WriteToInbox("fingersaver chat", "global", nil, "fingersaver", "fingersaver", ""); err != nil {
 		t.Fatalf("write fingersaver: %v", err)
 	}
-	if _, err := s.WriteToInbox("no project context", "global", nil, "manual", ""); err != nil {
+	if _, err := s.WriteToInbox("no project context", "global", nil, "manual", "", ""); err != nil {
 		t.Fatalf("write empty: %v", err)
 	}
 
@@ -478,7 +478,7 @@ func TestInsertMemoryProjectPersistence(t *testing.T) {
 // and the result is queryable via IsConsumed.
 func TestMarkConsumedAtomicAndIdempotent(t *testing.T) {
 	s := tempSqliteStore(t)
-	mem, err := s.WriteToInbox("consume me", "global", nil, "test", "")
+	mem, err := s.WriteToInbox("consume me", "global", nil, "test", "", "")
 	if err != nil {
 		t.Fatalf("write: %v", err)
 	}
@@ -521,7 +521,7 @@ func TestMarkConsumedAtomicAndIdempotent(t *testing.T) {
 // do not lose each other's marks (the race the old read-modify-write had).
 func TestMarkConsumedConcurrent(t *testing.T) {
 	s := tempSqliteStore(t)
-	mem, err := s.WriteToInbox("concurrent consume", "global", nil, "test", "")
+	mem, err := s.WriteToInbox("concurrent consume", "global", nil, "test", "", "")
 	if err != nil {
 		t.Fatalf("write: %v", err)
 	}

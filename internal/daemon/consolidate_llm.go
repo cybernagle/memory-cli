@@ -108,6 +108,13 @@ func (t *ConsolidateLLMTask) consolidateProcessed(s store.Store) (int, error) {
 
 			if len(merged) >= len(batch) {
 				log.Printf("[consolidate-llm] project %s: no reduction (%d → %d), skip", proj, len(batch), len(merged))
+				// Mark the SOURCE processed memories in this batch as consumed so they are
+				// skipped next tick. Without this, the same batch is re-listed and re-merged
+				// every tick forever (infinite LLM waste). Mirrors Phase B's no-reduction branch.
+				// memories[i:end] are the sources since merges[i] was built from memories[i].
+				for k := i; k < end; k++ {
+					s.MarkConsumed(memories[k].ID, "consolidate-llm")
+				}
 				continue
 			}
 
@@ -136,7 +143,10 @@ func (t *ConsolidateLLMTask) consolidateProcessed(s store.Store) (int, error) {
 					continue
 				}
 				setProjectOnMemory(t.Store, written.ID, proj)
-				s.MarkConsumed(written.ID, "consolidate-llm")
+				// Do NOT MarkConsumed the freshly-written organized memory here. Marking it at
+				// birth trips Phase B's ">0.8 already-consumed" gate (Phase B considers organized
+				// memories), so it would never re-consolidate anything Phase A produced. Phase B
+				// marks organized memories when it actually considers them.
 				totalMerged++
 			}
 

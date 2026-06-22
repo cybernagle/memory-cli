@@ -195,6 +195,10 @@ var retagCmd = &cobra.Command{
 
 		del, _ := db.Exec("DELETE FROM entity_mentions")
 		badRows, _ := del.RowsAffected()
+		// TODO(code-review): after deleting mentions, entities whose mention count drops to 0
+		// are left orphaned. Consider pruning them (DELETE FROM entities WHERE id NOT IN
+		// (SELECT entity_id FROM entity_mentions)) to keep the entity table honest. Not done
+		// here because it changes rebuild semantics and needs its own idempotency tests.
 
 		ctx := context.Background()
 		mentionsRebuilt := 0

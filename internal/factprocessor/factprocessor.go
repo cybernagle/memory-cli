@@ -69,12 +69,21 @@ func (p *FactProcessor) Process(ctx context.Context, input plugin.ProcessInput) 
 		}
 		sessionCount++
 		var contents []string
+		var projects []string
 		for _, item := range items {
 			contents = append(contents, item.Content)
+			projects = append(projects, item.Project)
 			allSourceIDs = append(allSourceIDs, item.ID)
 		}
+		// Fallback project for the session — used for chunks whose items don't all agree on one
+		// project (e.g. a cd mid-session or a subagent in a different cwd). Per-chunk attribution
+		// is preferred; see chunkProject.
+		sessionProject := ""
+		if len(items) > 0 {
+			sessionProject = items[0].Project
+		}
 
-		chunks := chunkContents(contents, maxContentsPerCall, maxContentChars)
+		chunks, chunkProj := chunkContents(contents, projects, maxContentsPerCall, maxContentChars)
 		log.Printf("[fact-processor] session %s: %d items → %d chunks", sid, len(contents), len(chunks))
 
 		// Limit chunks from this session to stay within budget
@@ -84,6 +93,7 @@ func (p *FactProcessor) Process(ctx context.Context, input plugin.ProcessInput) 
 		}
 		if len(chunks) > remaining {
 			chunks = chunks[:remaining]
+			chunkProj = chunkProj[:remaining]
 			log.Printf("[fact-processor] trimming session %s to %d chunks (budget)", sid, remaining)
 		}
 
@@ -105,6 +115,12 @@ func (p *FactProcessor) Process(ctx context.Context, input plugin.ProcessInput) 
 				}
 				extracted = extracted[:trimTo]
 			}
+
+			// Per-chunk project: if every item in this chunk shares one project, stamp it;
+			// otherwise fall back to the session's first-item project. This fixes the bug where
+			// a session spanning multiple projects (cd mid-session, foreign-cwd subagent) had its
+			// minority-project memories mis-stamped with the first project.
+			thisChunkProject := chunkProject(chunkProj[ci], sessionProject)
 
 			for _, m := range extracted {
 				cat := "knowledge"
@@ -135,6 +151,7 @@ func (p *FactProcessor) Process(ctx context.Context, input plugin.ProcessInput) 
 						"tags":       tags,
 						"confidence": m.Confidence,
 						"created_at": time.Now().Format(time.RFC3339),
+						"project":    thisChunkProject,
 					},
 					Confidence: m.Confidence,
 				})
@@ -151,23 +168,54 @@ func (p *FactProcessor) extract(ctx context.Context, contents []string) ([]llm.E
 }
 
 // chunkContents splits contents into chunks that fit within count and char limits.
-func chunkContents(contents []string, maxCount, maxChars int) [][]string {
+// It also returns, per chunk, the projects of the source items that went into it
+// (chunkProjects[i] corresponds to chunks[i]) so callers can stamp per-chunk project
+// attribution rather than assuming one project for a whole multi-project session.
+func chunkContents(contents []string, projects []string, maxCount, maxChars int) ([][]string, [][]string) {
 	var chunks [][]string
+	var chunkProjects [][]string
 	var current []string
+	var currentProjects []string
 	chars := 0
-	for _, c := range contents {
+	for idx, c := range contents {
 		if len(current) >= maxCount || (chars+len(c) > maxChars && len(current) > 0) {
 			chunks = append(chunks, current)
+			chunkProjects = append(chunkProjects, currentProjects)
 			current = nil
+			currentProjects = nil
 			chars = 0
 		}
 		current = append(current, c)
+		if idx < len(projects) {
+			currentProjects = append(currentProjects, projects[idx])
+		}
 		chars += len(c)
 	}
 	if len(current) > 0 {
 		chunks = append(chunks, current)
+		chunkProjects = append(chunkProjects, currentProjects)
 	}
-	return chunks
+	return chunks, chunkProjects
+}
+
+// chunkProject returns the project to stamp onto memories extracted from one chunk.
+// If every source item in the chunk shares a single non-empty project, that project
+// wins (finest-grained provenance). Otherwise it falls back to sessionProject, which
+// preserves the prior single-project-stamping behavior for ambiguous/multi-project chunks.
+func chunkProject(chunkProjects []string, sessionProject string) string {
+	if len(chunkProjects) == 0 {
+		return sessionProject
+	}
+	first := chunkProjects[0]
+	if first == "" {
+		return sessionProject
+	}
+	for _, p := range chunkProjects[1:] {
+		if p != first {
+			return sessionProject
+		}
+	}
+	return first
 }
 
 func groupBySession(items []plugin.InboxItem) map[string][]plugin.InboxItem {
@@ -261,6 +309,7 @@ func NewMemoryFromDataItem(item plugin.DataItem) *store.Memory {
 	tagsRaw, _ := item.Data["tags"].([]string)
 	confidence, _ := item.Data["confidence"].(float64)
 	createdAt, _ := item.Data["created_at"].(string)
+	project, _ := item.Data["project"].(string)
 
 	if createdAt == "" {
 		createdAt = time.Now().Format(time.RFC3339)
@@ -282,6 +331,7 @@ func NewMemoryFromDataItem(item plugin.DataItem) *store.Memory {
 		Scope:       "global",
 		Tags:        tagsRaw,
 		Source:      "fact-processor",
+		Project:     project,
 		CreatedAt:   t,
 		UpdatedAt:   t,
 		Version:     1,

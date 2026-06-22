@@ -33,7 +33,11 @@ func (a *ConversationsAdapter) Ingest() ([]*store.Memory, error) {
 			return nil
 		}
 
-		project := extractProjectName(filepath.Dir(path))
+		// Fallback project name derived from the Claude session-storage directory. The previous
+		// extractProjectName helper did a lossy ReplaceAll('-', '/') that turned names like
+		// "car-agent" into "car/agent". ProjectFromClaudeDir decodes the encoded dir name without
+		// that corruption. Per-entry cwd (ProjectFromCwd) remains the primary signal below.
+		project := ProjectFromClaudeDir(filepath.Dir(path))
 		// Prefer the on-disk filename as the initial session id, but per-entry sessionId inside
 		// the file wins (subagent transcripts under subagents/ reuse the PARENT session id).
 		defaultSessionID := strings.TrimSuffix(info.Name(), ".jsonl")
@@ -255,15 +259,6 @@ func extractContent(raw interface{}, role string) string {
 		return strings.TrimSpace(strings.Join(parts, "\n"))
 	}
 	return ""
-}
-
-func extractProjectName(dir string) string {
-	base := filepath.Base(dir)
-	base = strings.TrimPrefix(base, "-Users-naglezhang-Desktop-Code-")
-	base = strings.TrimPrefix(base, "-Users-naglezhang-")
-	base = strings.TrimPrefix(base, "-")
-	base = strings.ReplaceAll(base, "-", "/")
-	return base
 }
 
 // shouldFilterContent returns true for conversational noise that should not become memories.

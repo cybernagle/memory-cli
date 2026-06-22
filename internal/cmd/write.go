@@ -41,7 +41,7 @@ var writeCmd = &cobra.Command{
 			tags = append(tags, "cat:"+writeCategory)
 		}
 
-		mem, err := s.WriteToInbox(content, writeScope, tags, writeSource, ingest.CurrentProject())
+		mem, err := s.WriteToInbox(content, writeScope, tags, writeSource, ingest.CurrentProject(), ingest.CurrentTmuxSession())
 		if err != nil {
 			return err
 		}

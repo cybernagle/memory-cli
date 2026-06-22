@@ -38,6 +38,12 @@ func ComputeStats(s statser) (*StatsResponse, error) {
 }
 
 // computeStatsSQL runs aggregate COUNT queries — never loads memory rows into Go.
+//
+// TODO(code-review): most Rows.Scan / QueryRow.Scan errors here are ignored (best-effort
+// dashboard stats). The QueryRow scans (Recent24h, ExpiringSoon, processor counts) are the
+// cheapest to check and would surface DB-level corruption early, but adding checks changes
+// the return semantics (currently always returns a partial response + nil error). Defer until
+// a dashboard reliability requirement lands.
 func computeStatsSQL(s *store.SqliteStore) (*StatsResponse, error) {
 	db := s.DB()
 	resp := &StatsResponse{
@@ -81,7 +87,10 @@ func computeStatsSQL(s *store.SqliteStore) (*StatsResponse, error) {
 		"process-cmd":     int64(store.ConsumerProcessCmd),
 	} {
 		var count int
-		db.QueryRow("SELECT COUNT(*) FROM memories WHERE consumed_mask & ? != 0", bit).Scan(&count)
+		// Parenthesize the bitwise-AND: in SQLite `&` binds looser than `!=`, so the unparenthesized
+		// `consumed_mask & ? != 0` parses as `consumed_mask & (? != 0)` and collapses all four
+		// counts to the same value. Group the mask test explicitly.
+		db.QueryRow("SELECT COUNT(*) FROM memories WHERE (consumed_mask & ?) != 0", bit).Scan(&count)
 		resp.Processors[name] = count
 	}
 	// Unconsumed = raw inbox that no processor has touched yet.

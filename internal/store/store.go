@@ -55,7 +55,7 @@ func (s *FileStore) Init() error {
 	return nil
 }
 
-func (s *FileStore) WriteToInbox(content string, scope string, tags []string, source string, project string) (*Memory, error) {
+func (s *FileStore) WriteToInbox(content string, scope string, tags []string, source string, project string, tmuxSession string) (*Memory, error) {
 	now := time.Now()
 	mem := &Memory{
 		ID:          uuid.New().String(),
@@ -67,6 +67,7 @@ func (s *FileStore) WriteToInbox(content string, scope string, tags []string, so
 		Tags:        tags,
 		Source:      defaultString(source, "manual"),
 		Project:     project,
+		TmuxSession: tmuxSession,
 		CreatedAt:   now,
 		UpdatedAt:   now,
 		Version:     1,
