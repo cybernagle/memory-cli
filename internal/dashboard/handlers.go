@@ -24,6 +24,7 @@ type Store interface {
 	FindByID(id string) (*store.Memory, error)
 	GetBacklinks(id string) ([]*store.Memory, error)
 	SearchLike(opts store.SearchOptions) ([]*store.Memory, error)
+	SearchWithExpansion(opts store.SearchOptions) ([]*store.Memory, error)
 }
 
 type storeWrapper struct {

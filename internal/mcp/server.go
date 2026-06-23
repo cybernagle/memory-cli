@@ -543,9 +543,9 @@ func runAskWorkflowMCP(s *Server, question string, history []chatMessage) (strin
 	}
 
 	// Search all phases.
-	inbox, _ := s.store.SearchLike(store.SearchOptions{Query: searchQuery, Phase: store.PhaseInbox})
-	org, _ := s.store.SearchLike(store.SearchOptions{Query: searchQuery, Phase: store.PhaseOrganized})
-	proc, _ := s.store.SearchLike(store.SearchOptions{Query: searchQuery, Phase: store.PhaseProcessed})
+	inbox, _ := s.store.SearchWithExpansion(store.SearchOptions{Query: searchQuery, Phase: store.PhaseInbox})
+	org, _ := s.store.SearchWithExpansion(store.SearchOptions{Query: searchQuery, Phase: store.PhaseOrganized})
+	proc, _ := s.store.SearchWithExpansion(store.SearchOptions{Query: searchQuery, Phase: store.PhaseProcessed})
 
 	combined := append(org, proc...)
 	combined = append(combined, inbox...)

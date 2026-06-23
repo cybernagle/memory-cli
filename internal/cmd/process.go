@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
 	"strings"
 	"time"
@@ -200,10 +201,14 @@ func runProcess(cmd *cobra.Command, args []string) error {
 			fmt.Fprintf(os.Stderr, "write organized: %v\n", err)
 			continue
 		}
-		// Persist provenance links: organized → each source inbox memory. LinkMemories writes
-		// bidirectional pairs to the links table (the field on Memory itself is read-only).
+		// Persist provenance links: organized → each source inbox memory.
 		for _, srcID := range allSourceIDs {
 			_ = s.LinkMemories(organized.ID, srcID)
+		}
+		// Check if this new organized memory supersedes an older one (same topic, same project).
+		// Marks the old one's metadata.superseded_by so search results prefer the latest version.
+		if superseded := s.CheckAndSupersede(organized); superseded > 0 {
+			log.Printf("[process] %d older memories superseded by new organized %s", superseded, organized.ID[:8])
 		}
 		written++
 	}

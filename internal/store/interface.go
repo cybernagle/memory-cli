@@ -18,6 +18,7 @@ type Store interface {
 	// Search
 	Search(opts SearchOptions) ([]*Memory, error)
 	SearchLike(opts SearchOptions) ([]*Memory, error)
+	SearchWithExpansion(opts SearchOptions) ([]*Memory, error)
 
 	// Links
 	ResolveBacklinks() (int, error)

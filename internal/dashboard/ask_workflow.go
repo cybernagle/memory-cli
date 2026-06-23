@@ -349,19 +349,18 @@ func stageFetchEntity(ctx *askContext) bool {
 	}
 	ctx.extra["searchQuery"] = searchQuery
 
-	// Inbox: IDF-ranked LIKE search.
-	inbox, _ := ctx.srv.store.impl.SearchLike(store.SearchOptions{
-		Query: searchQuery,
-		Phase: store.PhaseInbox,
-	})
-
-	// Organized + processed also via SearchLike — FTS can't handle Chinese queries
-	// (unicode61 doesn't segment CJK). SearchLike's CJK prefix matching works for all phases.
-	orgResults, _ := ctx.srv.store.impl.SearchLike(store.SearchOptions{
+	// SearchWithExpansion: initial search + frequent-term expansion + newest-first sort.
+	// This finds memories that don't contain the exact query keywords but are topically
+	// related (e.g. "瑞福莱" search expands to "合同" and finds the 6/22 ¥54,000 record).
+	orgResults, _ := ctx.srv.store.impl.SearchWithExpansion(store.SearchOptions{
 		Query: searchQuery,
 		Phase: store.PhaseOrganized,
 	})
-	procResults, _ := ctx.srv.store.impl.SearchLike(store.SearchOptions{
+	inbox, _ := ctx.srv.store.impl.SearchWithExpansion(store.SearchOptions{
+		Query: searchQuery,
+		Phase: store.PhaseInbox,
+	})
+	procResults, _ := ctx.srv.store.impl.SearchWithExpansion(store.SearchOptions{
 		Query: searchQuery,
 		Phase: store.PhaseProcessed,
 	})
