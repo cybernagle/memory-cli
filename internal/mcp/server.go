@@ -528,15 +528,17 @@ func runAskWorkflowMCP(s *Server, question string, history []chatMessage) (strin
 	}
 
 	// Entity search path: extract keywords + search all phases via SearchLike.
-	searchQuery := question
+	searchQuery := ""
 	if s.llm != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-		if kw, err := llmExtractKeywordsStandalone(ctx, s.llm, question); err == nil && kw != "" {
+		kw, err := llmExtractKeywordsStandalone(ctx, s.llm, question)
+		cancel()
+		if err == nil && strings.TrimSpace(kw) != "" {
 			searchQuery = kw
 		}
-		cancel()
 	}
-	if searchQuery == question {
+	if searchQuery == "" {
+		// LLM failed or returned empty — use CJK split fallback.
 		searchQuery = splitCJKKeywordsImpl(question)
 	}
 
