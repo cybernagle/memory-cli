@@ -539,7 +539,8 @@ a:hover { text-decoration: underline; }
         <option value="200">Top 200</option>
       </select>
       <span id="graphStats" class="muted" style="font-size:12px"></span>
-      <span class="muted" style="font-size:11px;margin-left:auto">点击=查看记忆 · 双击=展开关联</span>
+      <input type="text" id="entitySearch" placeholder="搜索实体（如 makro、go、合同）..." style="background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:3px 8px;font-size:12px;width:180px;margin-left:8px" oninput="filterEntityGraph()" />
+      <span class="muted" style="font-size:11px;margin-left:auto">点击=查看记忆 · 双击=展开关联 · 拖拽后位置固定</span>
     </div>
     <div style="flex:1;display:flex;overflow:hidden">
       <div id="entityNetwork" style="flex:1;background:var(--bg)"></div>
@@ -1648,10 +1649,21 @@ function loadEntityGraph(expandId) {
       entityEdges = new vis.DataSet();
       var container = document.getElementById('entityNetwork');
       entityNetwork = new vis.Network(container, { nodes: entityNodes, edges: entityEdges }, {
-        physics: { stabilization: { iterations: 150 }, barnesHut: { gravitationalConstant: -3000, springLength: 120 } },
+        // Physics: run briefly to settle, then STOP. No bouncing after drag — user drags
+        // a node and it stays where they put it.
+        physics: {
+          enabled: true,
+          solver: 'forceAtlas2Based',
+          forceAtlas2Based: { gravitationalConstant: -30, springLength: 100, springConstant: 0.01 },
+          stabilization: { iterations: 200, fit: true }
+        },
         nodes: { shape: 'dot', font: { color: '#e4e6f0', size: 13, face: 'system-ui' }, borderWidth: 2 },
-        edges: { color: { color: '#2e3348', opacity: 0.6 }, smooth: false, scaling: { min: 1, max: 8 } },
-        interaction: { hover: true, tooltipDelay: 200 }
+        edges: { color: { color: '#2e3348', opacity: 0.5 }, smooth: false, scaling: { min: 1, max: 6 } },
+        interaction: { hover: true, tooltipDelay: 200, dragNodes: true }
+      });
+      // After initial layout settles, disable physics so nodes stay where dragged.
+      entityNetwork.once('stabilizationIterationsDone', function() {
+        entityNetwork.setOptions({ physics: { enabled: false } });
       });
       entityNetwork.on('click', function(params) {
         if (params.nodes.length > 0) { showEntityMemories(params.nodes[0]); }
@@ -1724,6 +1736,62 @@ document.getElementById('graphLimit').addEventListener('change', function() {
   window._entityGraphLoaded = false;
   loadEntityGraph();
 });
+
+// Search filter: when user types, focus the graph on matching entity + its neighbors.
+// Non-matching nodes are dimmed (opacity reduced), not removed.
+function filterEntityGraph() {
+  var query = document.getElementById('entitySearch').value.trim().toLowerCase();
+  if (!query || !entityNodes) return;
+
+  // Find matching node IDs.
+  var matched = {};
+  entityNodes.forEach(function(n) {
+    if (n.label.toLowerCase().indexOf(query) >= 0) {
+      matched[n.id] = true;
+    }
+  });
+
+  // Also include 1-hop neighbors of matched nodes (from edges).
+  if (entityEdges) {
+    entityEdges.forEach(function(e) {
+      if (matched[e.from]) matched[e.to] = true;
+      if (matched[e.to]) matched[e.from] = true;
+    });
+  }
+
+  // Update node opacity: matched = full, others = dim.
+  var updates = [];
+  entityNodes.forEach(function(n) {
+    var isMatch = matched[n.id];
+    var oldColor = entityNodes.get(n.id).color || {};
+    updates.push({
+      id: n.id,
+      opacity: isMatch ? 1.0 : 0.15,
+      font: { color: isMatch ? '#e4e6f0' : '#3a3d4d', size: 13, face: 'system-ui' }
+    });
+  });
+  // vis.js doesn't have per-node opacity — use color alpha instead.
+  entityNodes.forEach(function(n) {
+    var orig = n.color || { background: '#6c8aff', border: '#1a1d27' };
+    var isMatch = matched[n.id];
+    entityNodes.update({
+      id: n.id,
+      color: {
+        background: isMatch ? orig.background : '#242836',
+        border: isMatch ? orig.border : '#1a1d27'
+      },
+      font: { color: isMatch ? '#e4e6f0' : '#2a2d3a', size: isMatch ? 14 : 11, face: 'system-ui' }
+    });
+  });
+
+  // Focus camera on matched nodes.
+  var matchIds = Object.keys(matched);
+  if (matchIds.length > 0 && matchIds.length < entityNodes.length) {
+    entityNetwork.focus(matchIds, { scale: 1.0, animation: { duration: 300 } });
+  } else if (matchIds.length === entityNodes.length) {
+    entityNetwork.fit({ animation: { duration: 300 } });
+  }
+}
 </script>
 </body>
 </html>
