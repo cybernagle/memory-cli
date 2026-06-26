@@ -1069,21 +1069,82 @@ func (srv *Server) handleEntityGraph(w http.ResponseWriter, r *http.Request) {
 			nodeIDs[expandID] = true
 		}
 	} else {
-		// If search query provided, filter entities by name first, THEN sort by mentions.
-		// Without q: top N entities overall. With q: top N entities matching the query.
+		// Two modes:
+		// - No q: top N entities overall by mention count.
+		// - With q: find entities matching the query (seed), then load their 1-hop co-occurrence
+		//   neighbors so the graph shows the query entity IN ITS CONTEXT, not isolated.
 		searchQ := q.Get("q")
 		var rows *sql.Rows
 		var err error
 		if searchQ != "" {
+			// Step 1: find seed entities matching the query.
+			seedIDs := make(map[string]bool)
 			rows, err = db.Query(`SELECT e.id,e.name,e.kind,COUNT(em.id) as mc
 				FROM entities e JOIN entity_mentions em ON em.entity_id=e.id
 				WHERE e.name LIKE ? AND LENGTH(e.name) <= 40 AND e.name NOT LIKE '%[[%'
-				GROUP BY e.id,e.name,e.kind ORDER BY mc DESC LIMIT ?`, "%"+searchQ+"%", limit)
+				GROUP BY e.id,e.name,e.kind ORDER BY mc DESC`, "%"+searchQ+"%")
+			if err == nil {
+				for rows.Next() {
+					var n eNode
+					rows.Scan(&n.ID, &n.Label, &n.Kind, &n.Mentions)
+					nodes, nodeIDs[n.ID] = append(nodes, n), true
+					seedIDs[n.ID] = true
+				}
+				rows.Close()
+			}
+			// Step 2: load co-occurrence neighbors of seed entities (top N by co-occurrence).
+			// These are entities that appear in the same memories as the seed — they provide
+			// the context the user wants to see.
+			if len(seedIDs) > 0 && len(nodes) < limit {
+				// Build seed ID list for SQL IN clause.
+				idArgs := make([]interface{}, 0, len(seedIDs))
+				placeholders := ""
+				i := 0
+				for id := range seedIDs {
+					if i > 0 {
+						placeholders += ","
+					}
+					placeholders += "?"
+					idArgs = append(idArgs, id)
+					i++
+				}
+				remaining := limit - len(nodes)
+				// Args: seed IDs (for IN), seed IDs again (for NOT IN), remaining limit.
+				neighborArgs := make([]interface{}, 0)
+				for id := range seedIDs { neighborArgs = append(neighborArgs, id) }
+				neighborArgs = append(neighborArgs, remaining) // LIMIT
+				neighborRows, _ := db.Query(`SELECT b.entity_id, e.name, e.kind, COUNT(*) as co
+					FROM entity_mentions a
+					JOIN entity_mentions b ON a.memory_id = b.memory_id AND a.entity_id != b.entity_id
+					JOIN entities e ON e.id = b.entity_id
+					WHERE a.entity_id IN (`+placeholders+`)
+					AND LENGTH(e.name) <= 40 AND e.name NOT LIKE '%[[%'
+					GROUP BY b.entity_id, e.name, e.kind
+					ORDER BY co DESC LIMIT ?`, neighborArgs...)
+				if neighborRows != nil {
+					for neighborRows.Next() {
+						var n eNode
+						neighborRows.Scan(&n.ID, &n.Label, &n.Kind, &n.Mentions)
+						if !nodeIDs[n.ID] {
+							nodes, nodeIDs[n.ID] = append(nodes, n), true
+						}
+					}
+					neighborRows.Close()
+				}
+			}
 		} else {
 			rows, err = db.Query(`SELECT e.id,e.name,e.kind,COUNT(em.id) as mc
 				FROM entities e JOIN entity_mentions em ON em.entity_id=e.id
 				WHERE LENGTH(e.name) <= 40 AND e.name NOT LIKE '%[[%'
 				GROUP BY e.id,e.name,e.kind ORDER BY mc DESC LIMIT ?`, limit)
+			if err == nil {
+				for rows.Next() {
+					var n eNode
+					rows.Scan(&n.ID, &n.Label, &n.Kind, &n.Mentions)
+					nodes, nodeIDs[n.ID] = append(nodes, n), true
+				}
+				rows.Close()
+			}
 		}
 		if err == nil {
 			for rows.Next() {
