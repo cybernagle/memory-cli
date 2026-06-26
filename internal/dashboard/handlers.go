@@ -1032,18 +1032,6 @@ func (srv *Server) handleEntityGraph(w http.ResponseWriter, r *http.Request) {
 
 	nodeIDs := make(map[string]bool)
 
-	type eNode struct {
-		ID       string `json:"id"`
-		Label    string `json:"label"`
-		Mentions int    `json:"mentions"`
-		Kind     string `json:"kind"`
-	}
-	type eEdge struct {
-		From   string `json:"from"`
-		To     string `json:"to"`
-		Weight int    `json:"weight"`
-	}
-
 	var nodes []eNode
 	var edges []eEdge
 
@@ -1132,6 +1120,21 @@ func (srv *Server) handleEntityGraph(w http.ResponseWriter, r *http.Request) {
 					neighborRows.Close()
 				}
 			}
+			// If entity table had few/no results OR no edges, use content-based graph.
+			// Entity table only covers [[wiki-links]] — most terms like "contract" never get
+			// wiki-linked, and even "juli" returns 0 co-occurrence edges because entity_mentions
+			// co-occurrence is sparse. Content-based extracts terms from actual memory text.
+			if searchQ != "" && (len(nodes) == 0 || len(edges) < 2) {
+				contentNodes, contentEdges := buildContentGraph(db, searchQ, limit)
+				if len(contentNodes) > 0 && len(contentEdges) > len(edges) {
+					nodes, edges = contentNodes, contentEdges
+					writeJSON(w, http.StatusOK, map[string]any{
+						"nodes": nodes, "edges": edges,
+						"stats": fmt.Sprintf("%d nodes, %d edges (content-based)", len(nodes), len(edges)),
+					})
+					return
+				}
+			}
 		} else {
 			rows, err = db.Query(`SELECT e.id,e.name,e.kind,COUNT(em.id) as mc
 				FROM entities e JOIN entity_mentions em ON em.entity_id=e.id
@@ -1182,6 +1185,183 @@ func (srv *Server) handleEntityGraph(w http.ResponseWriter, r *http.Request) {
 		"nodes": nodes, "edges": edges,
 		"stats": fmt.Sprintf("%d nodes, %d edges", len(nodes), len(edges)),
 	})
+}
+
+// buildContentGraph builds an entity graph from memory CONTENT when the entity table
+// has no match for the query (e.g. "contract" was never a [[wiki-link]]). It searches
+// memories containing the query term, extracts frequent co-occurring terms, and constructs
+// nodes + co-occurrence edges dynamically.
+type eNode struct {
+	ID       string `json:"id"`
+	Label    string `json:"label"`
+	Mentions int    `json:"mentions"`
+	Kind     string `json:"kind"`
+}
+type eEdge struct {
+	From   string `json:"from"`
+	To     string `json:"to"`
+	Weight int    `json:"weight"`
+}
+
+func buildContentGraph(db *sql.DB, query string, limit int) ([]eNode, []eEdge) {
+	// Step 1: find memories containing the query term.
+	rows, err := db.Query(`SELECT id, content FROM memories
+		WHERE content LIKE ? AND phase IN ('organized','processed')
+		ORDER BY created_at DESC LIMIT 200`, "%"+query+"%")
+	if err != nil {
+		return nil, nil
+	}
+
+	type memData struct {
+		id      string
+		content string
+	}
+	var mems []memData
+	for rows.Next() {
+		var m memData
+		rows.Scan(&m.id, &m.content)
+		mems = append(mems, m)
+	}
+	rows.Close()
+
+	if len(mems) == 0 {
+		return nil, nil
+	}
+
+	// Step 2: extract terms from each memory, count per-memory frequency, and build co-occurrence.
+	termFreq := make(map[string]int)       // term → number of memories containing it
+	coOccur := make(map[string]int)        // "termA\x00termB" → co-occurrence count
+	var termList []string                   // unique terms ordered by frequency
+	termSet := make(map[string]bool)
+
+	// Also include the query term itself as a node.
+	queryLower := strings.ToLower(query)
+	termFreq[queryLower] = len(mems)
+	termSet[queryLower] = true
+	termList = append(termList, queryLower)
+
+	for _, m := range mems {
+		content := strings.ToLower(m.content)
+		// Extract CJK 2-3 char segments + ASCII words from this memory.
+		var memTerms []string
+		seen := make(map[string]bool)
+		for _, seg := range cjkGraphRe.FindAllString(content, -1) {
+			runes := []rune(seg)
+			for n := 2; n <= 3 && n <= len(runes); n++ {
+				t := string(runes[:n])
+				if !graphStopWord(t) && !seen[t] {
+					seen[t] = true
+					memTerms = append(memTerms, t)
+				}
+			}
+		}
+		for _, w := range asciiGraphRe.FindAllString(content, -1) {
+			if len(w) >= 3 && !graphStopWord(w) && !seen[w] {
+				seen[w] = true
+				memTerms = append(memTerms, w)
+			}
+		}
+
+		// Add query term to this memory's terms.
+		if !seen[queryLower] {
+			memTerms = append(memTerms, queryLower)
+		}
+
+		// Update frequency and co-occurrence.
+		for _, t := range memTerms {
+			termFreq[t]++
+			if !termSet[t] {
+				termSet[t] = true
+				termList = append(termList, t)
+			}
+		}
+		for i := 0; i < len(memTerms); i++ {
+			for j := i + 1; j < len(memTerms); j++ {
+				a, b := memTerms[i], memTerms[j]
+				if a > b { a, b = b, a }
+				coOccur[a+"\x00"+b]++
+			}
+		}
+	}
+
+	// Step 3: pick top N terms by frequency (min 3 = appears in 3+ memories).
+	threshold := 3
+	if len(mems) > 50 {
+		threshold = len(mems) / 20 // 5% threshold for large sets
+	}
+
+	type termEntry struct {
+		term string
+		freq int
+	}
+	var candidates []termEntry
+	for _, t := range termList {
+		if termFreq[t] >= threshold {
+			candidates = append(candidates, termEntry{t, termFreq[t]})
+		}
+	}
+	sort.Slice(candidates, func(i, j int) bool { return candidates[i].freq > candidates[j].freq })
+	if len(candidates) > limit {
+		candidates = candidates[:limit]
+	}
+
+	// Build nodes.
+	selectedSet := make(map[string]bool)
+	var nodes []eNode
+	for _, c := range candidates {
+		nodes = append(nodes, eNode{ID: c.term, Label: c.term, Mentions: c.freq})
+		selectedSet[c.term] = true
+	}
+
+	// Build edges: co-occurrence between selected terms, weight >= 2.
+	var edges []eEdge
+	for key, weight := range coOccur {
+		if weight < 2 {
+			continue
+		}
+		parts := strings.SplitN(key, "\x00", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		if selectedSet[parts[0]] && selectedSet[parts[1]] {
+			edges = append(edges, eEdge{From: parts[0], To: parts[1], Weight: weight})
+		}
+	}
+
+	if nodes == nil {
+		nodes = []eNode{}
+	}
+	if edges == nil {
+		edges = []eEdge{}
+	}
+	return nodes, edges
+}
+
+var (
+	cjkGraphRe   = regexp.MustCompile(`[\x{4e00}-\x{9fff}]+`)
+	asciiGraphRe = regexp.MustCompile(`[a-z0-9][a-z0-9._-]+`)
+)
+
+func graphStopWord(w string) bool {
+	// Pure numbers are noise.
+	allDigit := true
+	for _, r := range w {
+		if r < '0' || r > '9' {
+			allDigit = false
+			break
+		}
+	}
+	if allDigit {
+		return true
+	}
+	stopWords := map[string]bool{
+		"the": true, "and": true, "for": true, "with": true, "from": true,
+		"this": true, "that": true, "are": true, "was": true, "were": true,
+		"has": true, "have": true, "not": true, "but": true, "all": true,
+		"can": true, "will": true, "http": true, "https": true, "www": true,
+		"com": true, "org": true, "true": true, "false": true, "null": true,
+	}
+	return stopWords[w]
 }
 
 func (srv *Server) handleEntityMemories(w http.ResponseWriter, r *http.Request) {
