@@ -113,6 +113,7 @@ var serveCmd = &cobra.Command{
 				d.AddTask(&daemon.ConsolidateLLMTask{Store: sqliteStore, LLM: llmClient})
 				d.AddTask(&daemon.EnrichTagsTask{Store: sqliteStore, LLM: llmClient})
 				d.AddTask(&daemon.ProfileTask{Store: sqliteStore, LLM: llmClient})
+				d.AddTask(&daemon.EntityExtractionTask{Store: sqliteStore, LLM: llmClient})
 				// EvidenceTask (RECONCILE P3 #18): sediment per-domain accept/reject signal onto
 				// preference memories. Runs after ProfileTask — fine-grained counterpart to the
 				// global character profile it writes. Does not need the LLM.
