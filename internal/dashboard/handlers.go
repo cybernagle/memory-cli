@@ -1010,3 +1010,159 @@ func extractSearchKeywords(question string) string {
 	// can then rank/filter by relevance.
 	return strings.Join(out, " OR ")
 }
+
+// ─── Entity Graph endpoints ───
+
+func (srv *Server) handleEntityGraph(w http.ResponseWriter, r *http.Request) {
+	sqlStore, ok := srv.store.impl.(*store.SqliteStore)
+	if !ok {
+		writeJSON(w, http.StatusOK, map[string]any{"nodes": []any{}, "edges": []any{}})
+		return
+	}
+	db := sqlStore.DB()
+	q := r.URL.Query()
+	limit := 50
+	if v := q.Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			limit = n
+		}
+	}
+	expandID := q.Get("expand")
+
+	nodeIDs := make(map[string]bool)
+
+	type eNode struct {
+		ID       string `json:"id"`
+		Label    string `json:"label"`
+		Mentions int    `json:"mentions"`
+		Kind     string `json:"kind"`
+	}
+	type eEdge struct {
+		From   string `json:"from"`
+		To     string `json:"to"`
+		Weight int    `json:"weight"`
+	}
+
+	var nodes []eNode
+	var edges []eEdge
+
+	if expandID != "" {
+		var expandName string
+		db.QueryRow("SELECT name FROM entities WHERE id = ?", expandID).Scan(&expandName)
+		rows, err := db.Query(`SELECT DISTINCT b.entity_id, e.name, e.kind, COUNT(*) as co
+			FROM entity_mentions a JOIN entity_mentions b ON a.memory_id=b.memory_id AND a.entity_id!=b.entity_id
+			JOIN entities e ON e.id=b.entity_id WHERE a.entity_id=?
+			GROUP BY b.entity_id,e.name,e.kind ORDER BY co DESC LIMIT ?`, expandID, limit)
+		if err == nil {
+			for rows.Next() {
+				var n eNode
+				rows.Scan(&n.ID, &n.Label, &n.Kind, &n.Mentions)
+				nodes, nodeIDs[n.ID] = append(nodes, n), true
+			}
+			rows.Close()
+		}
+		if expandName != "" {
+			var mc int
+			db.QueryRow("SELECT COUNT(*) FROM entity_mentions WHERE entity_id=?", expandID).Scan(&mc)
+			nodes = append(nodes, eNode{ID: expandID, Label: expandName, Mentions: mc})
+			nodeIDs[expandID] = true
+		}
+	} else {
+		rows, err := db.Query(`SELECT e.id,e.name,e.kind,COUNT(em.id) as mc
+			FROM entities e JOIN entity_mentions em ON em.entity_id=e.id
+			GROUP BY e.id,e.name,e.kind ORDER BY mc DESC LIMIT ?`, limit)
+		if err == nil {
+			for rows.Next() {
+				var n eNode
+				rows.Scan(&n.ID, &n.Label, &n.Kind, &n.Mentions)
+				nodes, nodeIDs[n.ID] = append(nodes, n), true
+			}
+			rows.Close()
+		}
+	}
+
+	// Co-occurrence edges between loaded nodes.
+	coRows, _ := db.Query(`SELECT a.entity_id,b.entity_id,COUNT(*) as w
+		FROM entity_mentions a JOIN entity_mentions b ON a.memory_id=b.memory_id AND a.entity_id<b.entity_id
+		GROUP BY a.entity_id,b.entity_id HAVING w>=2`)
+	if coRows != nil {
+		for coRows.Next() {
+			var from, to string
+			var w int
+			coRows.Scan(&from, &to, &w)
+			if nodeIDs[from] && nodeIDs[to] {
+				edges = append(edges, eEdge{From: from, To: to, Weight: w})
+			}
+		}
+		coRows.Close()
+	}
+
+	if nodes == nil {
+		nodes = []eNode{}
+	}
+	if edges == nil {
+		edges = []eEdge{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"nodes": nodes, "edges": edges,
+		"stats": fmt.Sprintf("%d nodes, %d edges", len(nodes), len(edges)),
+	})
+}
+
+func (srv *Server) handleEntityMemories(w http.ResponseWriter, r *http.Request) {
+	entityID := r.URL.Query().Get("entity_id")
+	if entityID == "" {
+		writeError(w, http.StatusBadRequest, "entity_id required")
+		return
+	}
+	sqlStore, ok := srv.store.impl.(*store.SqliteStore)
+	if !ok {
+		writeJSON(w, http.StatusOK, map[string]any{"memories": []any{}})
+		return
+	}
+	db := sqlStore.DB()
+
+	rows, err := db.Query("SELECT memory_id FROM entity_mentions WHERE entity_id=?", entityID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	var memIDs []string
+	for rows.Next() {
+		var id string
+		rows.Scan(&id)
+		memIDs = append(memIDs, id)
+	}
+	rows.Close()
+
+	var entityName string
+	db.QueryRow("SELECT name FROM entities WHERE id=?", entityID).Scan(&entityName)
+
+	if len(memIDs) == 0 {
+		writeJSON(w, http.StatusOK, map[string]any{"memories": []any{}, "entity": entityName, "count": 0})
+		return
+	}
+
+	// Load memories and filter to entity's set.
+	allMems, _ := srv.store.impl.List(store.ListOptions{Limit: 500})
+	idSet := make(map[string]bool)
+	for _, id := range memIDs {
+		idSet[id] = true
+	}
+	var filtered []*store.Memory
+	for _, m := range allMems {
+		if idSet[m.ID] {
+			if len(m.Content) > 150 {
+				m.Content = m.Content[:150] + "..."
+			}
+			filtered = append(filtered, m)
+			if len(filtered) >= 20 {
+				break
+			}
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"memories": filtered, "entity": entityName,
+		"count": len(filtered), "total_mentions": len(memIDs),
+	})
+}
