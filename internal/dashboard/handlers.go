@@ -2,6 +2,7 @@ package dashboard
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -1068,9 +1069,22 @@ func (srv *Server) handleEntityGraph(w http.ResponseWriter, r *http.Request) {
 			nodeIDs[expandID] = true
 		}
 	} else {
-		rows, err := db.Query(`SELECT e.id,e.name,e.kind,COUNT(em.id) as mc
-			FROM entities e JOIN entity_mentions em ON em.entity_id=e.id
-			GROUP BY e.id,e.name,e.kind ORDER BY mc DESC LIMIT ?`, limit)
+		// If search query provided, filter entities by name first, THEN sort by mentions.
+		// Without q: top N entities overall. With q: top N entities matching the query.
+		searchQ := q.Get("q")
+		var rows *sql.Rows
+		var err error
+		if searchQ != "" {
+			rows, err = db.Query(`SELECT e.id,e.name,e.kind,COUNT(em.id) as mc
+				FROM entities e JOIN entity_mentions em ON em.entity_id=e.id
+				WHERE e.name LIKE ? AND LENGTH(e.name) <= 40 AND e.name NOT LIKE '%[[%'
+				GROUP BY e.id,e.name,e.kind ORDER BY mc DESC LIMIT ?`, "%"+searchQ+"%", limit)
+		} else {
+			rows, err = db.Query(`SELECT e.id,e.name,e.kind,COUNT(em.id) as mc
+				FROM entities e JOIN entity_mentions em ON em.entity_id=e.id
+				WHERE LENGTH(e.name) <= 40 AND e.name NOT LIKE '%[[%'
+				GROUP BY e.id,e.name,e.kind ORDER BY mc DESC LIMIT ?`, limit)
+		}
 		if err == nil {
 			for rows.Next() {
 				var n eNode

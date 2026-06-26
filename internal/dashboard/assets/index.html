@@ -539,7 +539,7 @@ a:hover { text-decoration: underline; }
         <option value="200">Top 200</option>
       </select>
       <span id="graphStats" class="muted" style="font-size:12px"></span>
-      <input type="text" id="entitySearch" placeholder="搜索实体（如 makro、go、合同）..." style="background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:3px 8px;font-size:12px;width:180px;margin-left:8px" oninput="filterEntityGraph()" />
+      <input type="text" id="entitySearch" placeholder="搜索实体（如 makro、go、合同）..." style="background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:3px 8px;font-size:12px;width:180px;margin-left:8px" oninput="searchEntityGraph()" />
       <span class="muted" style="font-size:11px;margin-left:auto">点击=查看记忆 · 双击=展开关联 · 拖拽后位置固定</span>
     </div>
     <div style="flex:1;display:flex;overflow:hidden">
@@ -1737,79 +1737,63 @@ document.getElementById('graphLimit').addEventListener('change', function() {
   loadEntityGraph();
 });
 
-// Search filter: when user types, focus the graph on matching entity + its neighbors.
-// Non-matching nodes are dimmed (opacity reduced), not removed.
-function filterEntityGraph() {
-  var query = document.getElementById('entitySearch').value.trim().toLowerCase();
-  if (!query || !entityNodes) {
-    // Empty search → reset all nodes to normal.
-    if (entityNodes) { resetEntityColors(); }
-    return;
-  }
-
-  // Find matching node IDs — exact startsWith or contains, but skip garbage entities
-  // (wiki-link leakage: names containing [[ ]] or longer than 40 chars).
-  var matched = {};
-  entityNodes.forEach(function(n) {
-    var label = (n.label || '').toLowerCase();
-    if (label.length > 40 || label.indexOf('[[') >= 0) { return; } // skip garbage
-    if (label.indexOf(query) >= 0 || query.indexOf(label) >= 0) {
-      matched[n.id] = true;
-    }
-  });
-
-  // Also include 1-hop neighbors of matched nodes (from edges).
-  if (entityEdges) {
-    entityEdges.forEach(function(e) {
-      if (matched[e.from]) matched[e.to] = true;
-      if (matched[e.to]) matched[e.from] = true;
-    });
-  }
-
-  // Update node opacity: matched = full, others = dim.
-  var updates = [];
-  entityNodes.forEach(function(n) {
-    var isMatch = matched[n.id];
-    var oldColor = entityNodes.get(n.id).color || {};
-    updates.push({
-      id: n.id,
-      opacity: isMatch ? 1.0 : 0.15,
-      font: { color: isMatch ? '#e4e6f0' : '#3a3d4d', size: 13, face: 'system-ui' }
-    });
-  });
-  // vis.js doesn't have per-node opacity — use color alpha instead.
-  entityNodes.forEach(function(n) {
-    var orig = n.color || { background: '#6c8aff', border: '#1a1d27' };
-    var isMatch = matched[n.id];
-    entityNodes.update({
-      id: n.id,
-      color: {
-        background: isMatch ? orig.background : '#242836',
-        border: isMatch ? orig.border : '#1a1d27'
-      },
-      font: { color: isMatch ? '#e4e6f0' : '#2a2d3a', size: isMatch ? 14 : 11, face: 'system-ui' }
-    });
-  });
-
-  // Focus camera on matched nodes.
-  var matchIds = Object.keys(matched);
-  if (matchIds.length > 0 && matchIds.length < entityNodes.length) {
-    entityNetwork.focus(matchIds, { scale: 1.0, animation: { duration: 300 } });
-  } else if (matchIds.length === entityNodes.length) {
-    entityNetwork.fit({ animation: { duration: 300 } });
-  }
-}
-
-function resetEntityColors() {
-  var palette = ['#6c8aff','#4ade80','#f59e0b','#ec4899','#a78bfa','#22d3ee','#f97316','#84cc16'];
-  entityNodes.forEach(function(n) {
-    entityNodes.update({
-      id: n.id,
-      color: { background: palette[Math.abs(hashCode(n.id)) % palette.length], border: '#1a1d27' },
-      font: { color: '#e4e6f0', size: 13, face: 'system-ui' }
-    });
-  });
-  entityNetwork.fit({ animation: { duration: 300 } });
+// Search: re-fetch from backend with query filter, rebuild graph entirely.
+// This ensures we search ALL entities (not just the initially loaded top 50).
+var entitySearchTimer = null;
+function searchEntityGraph() {
+  clearTimeout(entitySearchTimer);
+  entitySearchTimer = setTimeout(function() {
+    var query = document.getElementById('entitySearch').value.trim();
+    // Reset graph: destroy + reload with query.
+    if (entityNetwork) { entityNetwork.destroy(); entityNetwork = null; }
+    entityNodes = null;
+    entityEdges = null;
+    window._entityGraphLoaded = false;
+    var limit = document.getElementById('graphLimit').value || 50;
+    var url = '/api/entity-graph?limit=' + limit;
+    if (query) url += '&q=' + encodeURIComponent(query);
+    // Directly call the fetch logic (bypass expand check since we're not expanding).
+    fetch(url).then(function(r) { return r.json(); }).then(function(data) {
+      document.getElementById('graphStats').textContent = (data.stats || '') + (query ? ' (filtered: ' + query + ')' : '');
+      entityNodes = new vis.DataSet();
+      entityEdges = new vis.DataSet();
+      var container = document.getElementById('entityNetwork');
+      entityNetwork = new vis.Network(container, { nodes: entityNodes, edges: entityEdges }, {
+        physics: {
+          enabled: true, solver: 'forceAtlas2Based',
+          forceAtlas2Based: { gravitationalConstant: -30, springLength: 100, springConstant: 0.01 },
+          stabilization: { iterations: 200, fit: true }
+        },
+        nodes: { shape: 'dot', font: { color: '#e4e6f0', size: 13, face: 'system-ui' }, borderWidth: 2 },
+        edges: { color: { color: '#2e3348', opacity: 0.5 }, smooth: false, scaling: { min: 1, max: 6 } },
+        interaction: { hover: true, tooltipDelay: 200, dragNodes: true }
+      });
+      entityNetwork.once('stabilizationIterationsDone', function() {
+        entityNetwork.setOptions({ physics: { enabled: false } });
+      });
+      entityNetwork.on('click', function(params) {
+        if (params.nodes.length > 0) { showEntityMemories(params.nodes[0]); }
+        else { document.getElementById('entityDetail').style.display = 'none'; }
+      });
+      entityNetwork.on('doubleClick', function(params) {
+        if (params.nodes.length > 0) { expandEntity(params.nodes[0]); }
+      });
+      var palette = ['#6c8aff','#4ade80','#f59e0b','#ec4899','#a78bfa','#22d3ee','#f97316','#84cc16'];
+      data.nodes.forEach(function(n) {
+        entityNodes.add({
+          id: n.id, label: n.label,
+          size: 10 + Math.min(n.mentions * 2, 50),
+          color: { background: palette[Math.abs(hashCode(n.id)) % palette.length], border: '#1a1d27' },
+          title: n.label + ' (' + n.mentions + ' mentions)',
+          font: { size: Math.max(11, Math.min(18, n.mentions / 3)) }
+        });
+      });
+      data.edges.forEach(function(e) {
+        entityEdges.add({ id: e.from + '-' + e.to, from: e.from, to: e.to, value: e.weight, width: Math.min(e.weight, 6) });
+      });
+      window._entityGraphLoaded = true;
+    }).catch(function(e) { document.getElementById('graphStats').textContent = 'Error: ' + e.message; });
+  }, 300); // debounce 300ms
 }
 </script>
 </body>
