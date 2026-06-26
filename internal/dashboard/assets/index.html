@@ -1741,12 +1741,19 @@ document.getElementById('graphLimit').addEventListener('change', function() {
 // Non-matching nodes are dimmed (opacity reduced), not removed.
 function filterEntityGraph() {
   var query = document.getElementById('entitySearch').value.trim().toLowerCase();
-  if (!query || !entityNodes) return;
+  if (!query || !entityNodes) {
+    // Empty search → reset all nodes to normal.
+    if (entityNodes) { resetEntityColors(); }
+    return;
+  }
 
-  // Find matching node IDs.
+  // Find matching node IDs — exact startsWith or contains, but skip garbage entities
+  // (wiki-link leakage: names containing [[ ]] or longer than 40 chars).
   var matched = {};
   entityNodes.forEach(function(n) {
-    if (n.label.toLowerCase().indexOf(query) >= 0) {
+    var label = (n.label || '').toLowerCase();
+    if (label.length > 40 || label.indexOf('[[') >= 0) { return; } // skip garbage
+    if (label.indexOf(query) >= 0 || query.indexOf(label) >= 0) {
       matched[n.id] = true;
     }
   });
@@ -1791,6 +1798,18 @@ function filterEntityGraph() {
   } else if (matchIds.length === entityNodes.length) {
     entityNetwork.fit({ animation: { duration: 300 } });
   }
+}
+
+function resetEntityColors() {
+  var palette = ['#6c8aff','#4ade80','#f59e0b','#ec4899','#a78bfa','#22d3ee','#f97316','#84cc16'];
+  entityNodes.forEach(function(n) {
+    entityNodes.update({
+      id: n.id,
+      color: { background: palette[Math.abs(hashCode(n.id)) % palette.length], border: '#1a1d27' },
+      font: { color: '#e4e6f0', size: 13, face: 'system-ui' }
+    });
+  });
+  entityNetwork.fit({ animation: { duration: 300 } });
 }
 </script>
 </body>
