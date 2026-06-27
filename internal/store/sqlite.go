@@ -736,19 +736,58 @@ func (s *SqliteStore) SearchLike(opts SearchOptions) ([]*Memory, error) {
 
 	// Compute IDF weight per keyword: weight = log(totalDocs / docsContainingKeyword).
 	// Rare keywords → high weight. Common keywords → near-zero weight.
-	kwWeight := make(map[string]float64)
+	//
+	// For CJK entity keywords (e.g. "瑞福莱暖通设备（上海）有限公司"), the full string rarely
+	// matches verbatim — content usually has a shorter form ("瑞福莱"). So we precompute a
+	// fallback prefix: the longest CJK prefix that exists in the corpus, with its own IDF.
+	// This MUST be computed once per keyword here, NOT inside the per-memory loop — otherwise
+	// it becomes an N×K full-table-scan (13k memories × LIKE '%us%' = tens of minutes), which
+	// hangs the MCP server on any English keyword like "user".
+	//
+	// ASCII keywords skip prefix expansion entirely: "us"/"use" are meaningless substrings and
+	// matching them is both useless (no entity signal) and catastrophically slow.
+	idf := func(docCount int) float64 {
+		if docCount <= 0 {
+			return 0
+		}
+		w := math.Log(float64(totalDocs) / float64(docCount))
+		if w < 0.1 {
+			w = 0.1 // floor: even common keywords contribute a little
+		}
+		return w
+	}
+	kwWeight := make(map[string]float64)      // full-keyword IDF
+	prefixWeight := make(map[string]float64) // best-matching CJK-prefix IDF (fallback)
+	prefixStr := make(map[string]string)     // the actual prefix substring to test per-memory
 	for _, kw := range keywords {
 		if kw == "" {
 			continue
 		}
 		var cnt int
 		s.db.QueryRow("SELECT COUNT(*) FROM memories WHERE lower(content) LIKE ?", "%"+kw+"%").Scan(&cnt)
-		if cnt == 0 {
-			kwWeight[kw] = 0 // keyword doesn't exist anywhere — skip
-		} else {
-			kwWeight[kw] = math.Log(float64(totalDocs) / float64(cnt))
-			if kwWeight[kw] < 0.1 {
-				kwWeight[kw] = 0.1 // floor: even common keywords contribute a little
+		if cnt > 0 {
+			kwWeight[kw] = idf(cnt)
+		}
+		// Note: we do NOT skip when cnt==0. For a CJK keyword whose full form matches nothing
+		// (e.g. "瑞福莱暖通设备有限公司" when content only has "瑞福莱"), the prefix fallback below
+		// is exactly what recovers the match. Skipping here would defeat the whole feature.
+
+		// CJK-only prefix fallback: walk progressively shorter prefixes (longest first),
+		// pick the first one that exists in the corpus. ASCII keywords get no fallback —
+		// "us"/"use" are meaningless substrings and matching them is both useless (no entity
+		// signal) and catastrophically slow (the original N+1 hang).
+		if !containsCJK(kw) {
+			continue
+		}
+		runes := []rune(kw)
+		for n := len(runes) - 1; n >= 2; n-- {
+			sub := string(runes[:n])
+			var subCnt int
+			s.db.QueryRow("SELECT COUNT(*) FROM memories WHERE lower(content) LIKE ?", "%"+sub+"%").Scan(&subCnt)
+			if subCnt > 0 {
+				prefixWeight[kw] = idf(subCnt)
+				prefixStr[kw] = sub
+				break
 			}
 		}
 	}
@@ -778,7 +817,13 @@ func (s *SqliteStore) SearchLike(opts SearchOptions) ([]*Memory, error) {
 		contentLower := strings.ToLower(mem.Content)
 		score := 0.0
 		for kwi, kw := range keywords {
-			if kw == "" || kwWeight[kw] == 0 {
+			if kw == "" {
+				continue
+			}
+			// Skip a keyword only if it matches nothing AND has no CJK prefix fallback.
+			// A CJK entity ("瑞福莱暖通设备有限公司") may have kwWeight=0 (no verbatim match)
+			// yet still score via its "瑞福莱" prefix — that's the prefix feature's whole point.
+			if kwWeight[kw] == 0 && prefixStr[kw] == "" {
 				continue
 			}
 			boost := 1.0
@@ -789,23 +834,11 @@ func (s *SqliteStore) SearchLike(opts SearchOptions) ([]*Memory, error) {
 				score += kwWeight[kw] * boost
 				continue
 			}
-			// Keyword as a whole doesn't match (e.g. "瑞福莱暖通设备（上海）有限公司" is 13
-			// chars but content only has "瑞福莱"). Try progressively shorter CJK prefixes.
-			runes := []rune(kw)
-			for n := len(runes) - 1; n >= 2; n-- {
-				sub := string(runes[:n])
-				if strings.Contains(contentLower, sub) {
-					var subCnt int
-					s.db.QueryRow("SELECT COUNT(*) FROM memories WHERE lower(content) LIKE ?", "%"+sub+"%").Scan(&subCnt)
-					if subCnt > 0 {
-						w := math.Log(float64(totalDocs) / float64(subCnt))
-						if w < 0.1 {
-							w = 0.1
-						}
-						score += w * boost
-					}
-					break
-				}
+			// Full keyword didn't match — try the precomputed CJK prefix (if any).
+			// ASCII keywords have no prefix fallback. This is an in-memory substring test,
+			// so the whole per-memory loop is O(1) DB queries regardless of corpus size.
+			if psub := prefixStr[kw]; psub != "" && strings.Contains(contentLower, psub) {
+				score += prefixWeight[kw] * boost
 			}
 		}
 		if score > 0 {
@@ -821,6 +854,17 @@ func (s *SqliteStore) SearchLike(opts SearchOptions) ([]*Memory, error) {
 	}
 	out = s.filterSearch(out, opts)
 	return out, nil
+}
+
+// containsCJK reports whether s contains any CJK ideograph. Used by SearchLike to decide
+// whether a keyword is eligible for CJK prefix expansion (ASCII keywords like "user" are not).
+func containsCJK(s string) bool {
+	for _, r := range s {
+		if r >= '\u4e00' && r <= '\u9fff' {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *SqliteStore) filterSearch(memories []*Memory, opts SearchOptions) []*Memory {

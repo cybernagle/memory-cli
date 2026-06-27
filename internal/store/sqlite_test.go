@@ -2,6 +2,7 @@ package store
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -124,6 +125,73 @@ func TestSqliteSearch(t *testing.T) {
 	}
 	if results[0].Content != "dark mode preference" {
 		t.Errorf("content = %q", results[0].Content)
+	}
+}
+
+// TestSqliteSearchLikeASCIIFast is a regression test for an N+1 full-table-scan that made
+// any common ASCII keyword (e.g. "user", "React") hang the MCP server for ~20+ minutes.
+//
+// Root cause: the per-memory scoring loop ran a `SELECT COUNT(*) ... LIKE '%prefix%'`
+// subquery for EVERY memory that didn't contain the full keyword — and for ASCII keywords
+// the "prefix" was a meaningless substring ("us", "use") that matched thousands of docs.
+// With 13k memories that's ~10k full-table scans × 143ms ≈ 24 minutes.
+//
+// The fix precomputes prefix IDF once per keyword and skips prefix expansion for ASCII
+// keywords entirely (only CJK entity names benefit from it). This test seeds enough memories
+// that a naive per-memory subquery would be visibly slow, then asserts the search completes
+// well under the budget a healthy run needs. A regressed build would take minutes.
+func TestSqliteSearchLikeASCIIFast(t *testing.T) {
+	s := tempSqliteStore(t)
+
+	// Seed a corpus where "user" is common (matches many docs) — the worst case for the
+	// old per-memory prefix loop, since non-matches triggered the expensive subquery path.
+	for i := 0; i < 400; i++ {
+		if i%3 == 0 {
+			s.Write("the user prefers React and Next.js for frontend", PhaseOrganized, CategoryKnowledge, "global", nil, "test")
+		} else if i%3 == 1 {
+			s.Write("memory system uses sqlite for storage", PhaseOrganized, CategoryKnowledge, "global", nil, "test")
+		} else {
+			s.Write("design philosophy bans emoji", PhaseOrganized, CategoryKnowledge, "global", nil, "test")
+		}
+	}
+
+	start := time.Now()
+	results, err := s.SearchLike(SearchOptions{Query: "user"})
+	elapsed := time.Since(start)
+	if err != nil {
+		t.Fatalf("SearchLike: %v", err)
+	}
+	// "user" should match the ~133 React/frontend memories.
+	if len(results) == 0 {
+		t.Fatal("expected results for 'user', got 0")
+	}
+	// The regression would take many seconds (minutes at scale). A healthy run is sub-second.
+	// 2s is a generous ceiling that still catches the N+1 blowup.
+	if elapsed > 2*time.Second {
+		t.Errorf("SearchLike('user') took %v on 400 memories — N+1 full-table-scan regression suspected (should be <2s)", elapsed)
+	}
+}
+
+// TestSqliteSearchLikeCJKPrefix verifies CJK entity names still match via prefix expansion
+// (the feature the slow loop was originally written for). A long entity name that doesn't
+// appear verbatim must still surface memories containing its shorter form.
+func TestSqliteSearchLikeCJKPrefix(t *testing.T) {
+	s := tempSqliteStore(t)
+
+	// Content contains the short form only.
+	s.Write("瑞福莱暖通的服务合同金额5万4", PhaseOrganized, CategoryKnowledge, "global", nil, "test")
+	s.Write("unrelated project note", PhaseOrganized, CategoryKnowledge, "global", nil, "test")
+
+	// Query the long form — must still match via the "瑞福莱" prefix.
+	results, err := s.SearchLike(SearchOptions{Query: "瑞福莱暖通设备有限公司"})
+	if err != nil {
+		t.Fatalf("SearchLike: %v", err)
+	}
+	if len(results) == 0 {
+		t.Fatal("expected CJK prefix match for long entity name, got 0")
+	}
+	if !strings.Contains(results[0].Content, "瑞福莱") {
+		t.Errorf("top result doesn't contain the entity prefix: %q", results[0].Content)
 	}
 }
 
