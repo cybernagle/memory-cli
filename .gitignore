@@ -23,7 +23,11 @@ Thumbs.db
 .claude/
 .omc/
 .playwright-mcp/
-docs/
+# docs/: only ARCHITECTURE.md + architecture.svg are tracked (bilingual, public). The rest are
+# local working snapshots (ARCHITECTURE_DIAGNOSIS/RECONCILE/PROGRESS/COMMAND_AUDIT) — ignored.
+docs/*
+!docs/ARCHITECTURE.md
+!docs/architecture.svg
 PIPELINE_REVIEW.md
 
 # Stray artifacts
