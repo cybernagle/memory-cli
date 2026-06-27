@@ -64,12 +64,34 @@ func ProjectFromCwd(cwd string) string {
 
 // ProjectFromClaudeDir derives a project name from a Claude session-storage directory name.
 // Claude encodes the cwd as the directory name with dashes, e.g.
-// "-Users-naglezhang-Desktop-Code-makro". We trim the known home prefix and lowercase,
-// but deliberately do NOT replace "-" with "/" (that lossy step produced garbage like
-// "car/agent"). So "-...-car-agent" -> "car-agent".
+// "-Users-naglezhang-Desktop-Code-makro". We trim the home prefix (derived from $HOME so it
+// works on any machine, not just this user's) plus the common code-dir parents, then take the
+// final segment as the project name. We deliberately do NOT replace "-" with "/" (that lossy
+// step produced garbage like "car/agent"), so "-...-car-agent" -> "car-agent".
 func ProjectFromClaudeDir(dir string) string {
 	base := strings.ToLower(filepath.Base(dir))
-	for _, prefix := range []string{"-users-naglezhang-desktop-code-", "-users-naglezhang-", "-users-"} {
+	// Build the encoded prefixes to trim, derived from $HOME so it works on any machine instead
+	// of hardcoding "-users-naglezhang-". Claude encodes "/Users/naglezhang" as
+	// "-users-naglezhang" (drop leading slash, "/" → "-"). Trailing dirs under home that hold
+	// code (Desktop/Code, projects, code, dev, src) are stripped too so the project name is the
+	// last segment. Order matters: longest/most-specific first.
+	prefixes := []string{}
+	if home := os.Getenv("HOME"); home != "" {
+		encoded := strings.ToLower(strings.ReplaceAll(strings.TrimPrefix(home, "/"), "/", "-"))
+		prefixes = append(prefixes,
+			"-"+encoded+"-desktop-code-",  // ~/Desktop/Code/<project>
+			"-"+encoded+"-projects-",      // ~/projects/<project>
+			"-"+encoded+"-code-",          // ~/code/<project>
+			"-"+encoded+"-",               // ~/<anything>
+			"-"+encoded,
+		)
+	}
+	// Broad fallbacks for when $HOME is unset or the transcript came from another machine.
+	prefixes = append(prefixes,
+		"-users-", "-home-",
+		"-desktop-code-", "-projects-", "-code-",
+	)
+	for _, prefix := range prefixes {
 		base = strings.TrimPrefix(base, prefix)
 	}
 	base = strings.Trim(base, "-")

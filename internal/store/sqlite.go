@@ -534,6 +534,15 @@ func (s *SqliteStore) Search(opts SearchOptions) ([]*Memory, error) {
 		})
 	}
 
+	// Multi-word queries (contains whitespace) bypass FTS5 and go straight to SearchLike.
+	// FTS5's unicode61 tokenizer can't segment CJK, so a query like "橘粒科技 合同 报价" becomes
+	// one giant token under MATCH's default AND semantics → 0 results (ISSUE-001). SearchLike
+	// splits on whitespace and scores each keyword by IDF, which handles multi-word + CJK
+	// correctly. Single-token queries (no spaces) still benefit from FTS5's BM25 ranking.
+	if strings.ContainsAny(opts.Query, " \t") {
+		return s.SearchLike(opts)
+	}
+
 	// Try FTS5 first, with space/time filters pushed into SQL (not post-fetch Go filtering).
 	// Building the WHERE dynamically so each set filter is a real indexed predicate.
 	query := `
@@ -715,14 +724,18 @@ func (s *SqliteStore) searchHybrid(opts SearchOptions) ([]*Memory, error) {
 }
 
 func (s *SqliteStore) SearchLike(opts SearchOptions) ([]*Memory, error) {
-	// Split the query on OR (LLM keyword extraction produces "keyword1 OR keyword2").
-	// Rank by information-theoretic weight (IDF): a rare keyword like "瑞福莱" (36 docs out
-	// of 18k) carries far more signal than a common one like "上海" (thousands of docs).
-	// Each memory's score = sum of IDF weights of the keywords it contains. This naturally
-	// surfaces memories matching the rare/specific terms even if they miss the generic ones.
+	// Split the query into keywords. Two delimiter families:
+	//   - " OR " / "|"  → produced by LLM keyword extraction ("keyword1 OR keyword2")
+	//   - whitespace     → produced by multi-word user queries ("橘粒科技 合同 报价 项目")
+	// Splitting on whitespace too fixes ISSUE-001: without it a multi-word query collapsed into
+	// a single keyword (the whole string) and matched nothing. CJK entity names like
+	// "瑞福莱暖通设备" never contain spaces, so whitespace-splitting does not break them — the
+	// IDF + CJK-prefix logic below still treats each such token as one indivisible keyword.
 	keywordStr := strings.ToLower(opts.Query)
 	keywordStr = strings.ReplaceAll(keywordStr, " or ", "|")
-	keywords := strings.Split(keywordStr, "|")
+	keywords := strings.FieldsFunc(keywordStr, func(r rune) bool {
+		return r == '|' || r == ' ' || r == '\t' || r == ',' || r == '，'
+	})
 	for i, k := range keywords {
 		keywords[i] = strings.TrimSpace(k)
 	}

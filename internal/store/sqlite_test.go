@@ -140,6 +140,42 @@ func TestSqliteSearch(t *testing.T) {
 // keywords entirely (only CJK entity names benefit from it). This test seeds enough memories
 // that a naive per-memory subquery would be visibly slow, then asserts the search completes
 // well under the budget a healthy run needs. A regressed build would take minutes.
+// TestSqliteSearchLikeMultiWord is a regression test for ISSUE-001: multi-word keyword queries
+// ("橘粒科技 合同 报价") returned 0 results because SearchLike only split on "|"/" OR ", not on
+// whitespace — so the whole space-separated string became one keyword that matched nothing.
+//
+// The fix splits on whitespace (and commas) too. CJK entity names ("瑞福莱暖通设备") contain no
+// spaces, so they remain indivisible keywords; only genuine multi-word queries fan out.
+func TestSqliteSearchLikeMultiWord(t *testing.T) {
+	s := tempSqliteStore(t)
+
+	s.Write("橘粒科技和瑞福莱暖通签订网站开发合同，报价5万4", PhaseOrganized, CategoryKnowledge, "global", nil, "test")
+	s.Write("项目技术架构采用 React + Next.js", PhaseOrganized, CategoryKnowledge, "global", nil, "test")
+	s.Write("unrelated note about weather", PhaseOrganized, CategoryKnowledge, "global", nil, "test")
+
+	// Space-separated multi-word query — must fan out into 3 keywords and find the contract.
+	results, err := s.SearchLike(SearchOptions{Query: "橘粒科技 合同 报价"})
+	if err != nil {
+		t.Fatalf("SearchLike: %v", err)
+	}
+	if len(results) == 0 {
+		t.Fatal("ISSUE-001 regression: multi-word query returned 0 results")
+	}
+	// The contract memory should be top — it matches the rare keywords 橘粒/合同/报价.
+	if !strings.Contains(results[0].Content, "橘粒") {
+		t.Errorf("top result for multi-word query should be the contract memory, got: %q", results[0].Content)
+	}
+
+	// Also confirm it flows through Search() (which routes multi-word to SearchLike).
+	searchResults, err := s.Search(SearchOptions{Query: "橘粒科技 合同"})
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if len(searchResults) == 0 {
+		t.Fatal("Search() routed multi-word query returned 0 — multi-word bypass to SearchLike broken")
+	}
+}
+
 func TestSqliteSearchLikeASCIIFast(t *testing.T) {
 	s := tempSqliteStore(t)
 
