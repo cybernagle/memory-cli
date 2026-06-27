@@ -8,8 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
-
 	"github.com/cybernagle/memory-cli/internal/llm"
 	"github.com/cybernagle/memory-cli/internal/store"
 )
@@ -209,20 +207,18 @@ func (p *Processor) flushBatch(ctx context.Context, extracted []llm.ExtractedMem
 			tags = m.Categories
 		}
 		organized := &store.Memory{
-			ID:          uuid.New().String(),
 			Content:     m.Content,
-			ContentHash: store.HashContent(m.Content),
 			Phase:       store.PhaseProcessed,
 			Category:    cat,
 			Scope:       "global",
 			Tags:        tags,
 			Source:      "processor",
-			CreatedAt:   time.Now(),
-			UpdatedAt:   time.Now(),
-			Version:     1,
 			Links:       store.ExtractWikiLinks(m.Content),
 		}
-		if err := p.store.InsertMemory(organized); err != nil {
+		// Route through IngestMemory (not InsertMemory) so this organized write also triggers
+		// supersede detection — an old version of the same fact gets marked obsolete. Direct
+		// InsertMemory would bypass version tracking (chaos point ②).
+		if err := p.store.IngestMemory(organized); err != nil {
 			log.Printf("[processor] write organized: %v", err)
 			continue
 		}

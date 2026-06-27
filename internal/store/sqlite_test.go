@@ -179,6 +179,82 @@ func TestSqliteSearchLikeMultiWord(t *testing.T) {
 // TestResolveIDPrefix verifies that Read/Delete accept a unique UUID prefix (the truncated IDs
 // shown by search/list), not just the full UUID. This fixes the UX gap where list shows
 // "58e541e0" but `read 58e541e0` returned not-found.
+// TestWritePathsTriggerSupersede is the chaos-point-② regression test: supersede must fire on
+// EVERY write path that produces an organized/processed memory, not just the one manual caller
+// that used to remember. We write an old fact, then write a newer overlapping version via each
+// entry point and assert the old one got marked superseded.
+//
+// Before the fix, only cmd/process.go called CheckAndSupersede manually — daemon consolidate,
+// processor, direct Write/IngestMemory all bypassed it. Now IngestMemory (the unified chokepoint)
+// triggers it post-insert, and Write/WriteToInbox/processor all route through IngestMemory.
+func TestWritePathsTriggerSupersede(t *testing.T) {
+	mkVersion := func(t *testing.T, s *SqliteStore, amount string) *Memory {
+		t.Helper()
+		// Same entity (瑞福莱) + same predicate (合同金额) + enough shared CJK terms to cross
+		// the ≥3-shared-terms supersede threshold.
+		mem, err := s.Write(
+			"瑞福莱暖通设备合同金额"+amount+"元，甲方上海橘粒科技",
+			PhaseOrganized, CategoryKnowledge, "global", []string{"contract"}, "test",
+		)
+		if err != nil {
+			t.Fatalf("write: %v", err)
+		}
+		return mem
+	}
+
+	t.Run("via_Write", func(t *testing.T) {
+		s := tempSqliteStore(t)
+		old := mkVersion(t, s, "42000")
+		// Newer version of the same fact via Write — must supersede the old.
+		_ = mkVersion(t, s, "54000")
+		oldReloaded, err := s.FindByID(old.ID)
+		if err != nil {
+			t.Fatalf("reload old: %v", err)
+		}
+		if !IsSuperseded(oldReloaded) {
+			t.Error("old version not marked superseded after Write() of newer version")
+		}
+	})
+
+	t.Run("via_IngestMemory", func(t *testing.T) {
+		s := tempSqliteStore(t)
+		old := mkVersion(t, s, "42000")
+		newer := &Memory{
+			Content:   "瑞福莱暖通设备合同金额54000元，甲方上海橘粒科技",
+			Phase:     PhaseOrganized,
+			Category:  CategoryKnowledge,
+			Scope:     "global",
+			Source:    "test",
+			Tags:      []string{"contract"},
+			CreatedAt: time.Now(),
+		}
+		if err := s.IngestMemory(newer); err != nil {
+			t.Fatalf("IngestMemory: %v", err)
+		}
+		oldReloaded, _ := s.FindByID(old.ID)
+		if !IsSuperseded(oldReloaded) {
+			t.Error("old version not marked superseded after IngestMemory() of newer version")
+		}
+	})
+
+	t.Run("inbox_write_does_NOT_supersede", func(t *testing.T) {
+		// Inbox writes are raw events, not facts — they must never supersede.
+		s := tempSqliteStore(t)
+		old := mkVersion(t, s, "42000")
+		_, err := s.Write(
+			"瑞福莱暖通设备合同金额54000元，甲方上海橘粒科技",
+			PhaseInbox, CategoryInbox, "global", nil, "test",
+		)
+		if err != nil {
+			t.Fatalf("inbox write: %v", err)
+		}
+		oldReloaded, _ := s.FindByID(old.ID)
+		if IsSuperseded(oldReloaded) {
+			t.Error("inbox write should NOT supersede an organized fact")
+		}
+	})
+}
+
 func TestResolveIDPrefix(t *testing.T) {
 	s := tempSqliteStore(t)
 

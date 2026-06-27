@@ -147,16 +147,13 @@ func (s *SqliteStore) migrateLinksTable() {
 }
 
 func (s *SqliteStore) WriteToInbox(content string, scope string, tags []string, source string, project string, tmuxSession string) (*Memory, error) {
-	now := time.Now()
 	ttl, err := parseDuration("168h")
 	if err != nil {
 		ttl = 168 * time.Hour
 	}
-	expires := now.Add(ttl)
+	expires := time.Now().Add(ttl)
 	mem := &Memory{
-		ID:          uuid.New().String(),
 		Content:     content,
-		ContentHash: HashContent(content),
 		Phase:       PhaseInbox,
 		Category:    CategoryInbox,
 		Scope:       defaultString(scope, "global"),
@@ -164,13 +161,13 @@ func (s *SqliteStore) WriteToInbox(content string, scope string, tags []string, 
 		Source:      defaultString(source, "manual"),
 		Project:     project,
 		TmuxSession: tmuxSession,
-		CreatedAt:   now,
-		UpdatedAt:   now,
 		ExpiresAt:   &expires,
-		Version:     1,
 		Links:       ExtractWikiLinks(content),
 	}
-	if err := s.InsertMemory(mem); err != nil {
+	// Route through IngestMemory (the unified chokepoint) so ID/hash/timestamp defaults + any
+	// write-time side effects (supersede for fact phases) apply uniformly. Inbox writes don't
+	// supersede, but going through one entry point keeps all write paths consistent.
+	if err := s.IngestMemory(mem); err != nil {
 		return nil, err
 	}
 	return mem, nil
@@ -179,9 +176,7 @@ func (s *SqliteStore) WriteToInbox(content string, scope string, tags []string, 
 func (s *SqliteStore) Write(content string, memType Phase, category Category, scope string, tags []string, source string) (*Memory, error) {
 	now := time.Now()
 	mem := &Memory{
-		ID:          uuid.New().String(),
 		Content:     content,
-		ContentHash: HashContent(content),
 		Phase:       memType,
 		Category:    category,
 		Scope:       defaultString(scope, "global"),
@@ -200,7 +195,10 @@ func (s *SqliteStore) Write(content string, memType Phase, category Category, sc
 		expires := now.Add(ttl)
 		mem.ExpiresAt = &expires
 	}
-	if err := s.InsertMemory(mem); err != nil {
+	// Route through IngestMemory so organized/processed writes (facts) trigger supersede
+	// automatically, and defaults are filled uniformly. This replaces the old direct
+	// InsertMemory call that bypassed supersede entirely.
+	if err := s.IngestMemory(mem); err != nil {
 		return nil, err
 	}
 	return mem, nil
@@ -1450,6 +1448,18 @@ func formatTime(t *time.Time) interface{} {
 	return t.Format(time.RFC3339)
 }
 
+// IngestMemory is the unified write chokepoint: every memory enters storage through here. It
+// fills defaults (ID/hash/timestamps/version) then inserts. Critically, it triggers supersede
+// detection AFTER the insert commits — so version tracking (marking older memories of the same
+// fact as superseded) is an atomic side-effect of writing, not a manual call only one of the
+// 17 write paths remembered to make (chaos point ②). Supersede only fires for
+// organized/processed memories (facts that can have versions); inbox/capture writes are raw
+// events that never supersede anything.
+//
+// The supersede runs after tx.Commit (not inside InsertMemory's transaction) because
+// CheckAndSupersede lists existing memories and MarkSuperseded writes via s.db — running them
+// on the same tx would risk re-entrancy/deadlock, and the new memory must be committed before
+// it can be the supersede target.
 func (s *SqliteStore) IngestMemory(mem *Memory) error {
 	if mem.ID == "" {
 		mem.ID = uuid.New().String()
@@ -1466,7 +1476,16 @@ func (s *SqliteStore) IngestMemory(mem *Memory) error {
 	if mem.Version == 0 {
 		mem.Version = 1
 	}
-	return s.InsertMemory(mem)
+	if err := s.InsertMemory(mem); err != nil {
+		return err
+	}
+	// Post-commit supersede: if this is a fact (organized/processed), check whether it makes
+	// an older version of the same fact obsolete. Return value (count) is intentionally ignored
+	// — supersession is best-effort bookkeeping; a failure here must not fail the write.
+	if mem.Phase == PhaseOrganized || mem.Phase == PhaseProcessed {
+		s.CheckAndSupersede(mem)
+	}
+	return nil
 }
 
 // metadataJSON serializes a Memory's Metadata map to a JSON string for storage.
