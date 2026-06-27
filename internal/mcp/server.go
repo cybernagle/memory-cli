@@ -177,6 +177,28 @@ func toolDefinitions() []map[string]any {
 			},
 		},
 		{
+			"name":        "memory_read",
+			"description": "Read a single memory by ID. Accepts a full UUID or a unique prefix (e.g. the truncated IDs shown by search/list).",
+			"inputSchema": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"id": map[string]any{"type": "string", "description": "Memory ID or unique prefix"},
+				},
+				"required": []string{"id"},
+			},
+		},
+		{
+			"name":        "memory_delete",
+			"description": "Delete a memory by ID. Accepts a full UUID or a unique prefix. Use sparingly — deleted memories cannot be recovered.",
+			"inputSchema": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"id": map[string]any{"type": "string", "description": "Memory ID or unique prefix"},
+				},
+				"required": []string{"id"},
+			},
+		},
+		{
 			"name":        "memory_timeline",
 			"description": "Get a narrative summary of activities on a specific day or date range. E.g. 'what did I do today' or 'last week'.",
 			"inputSchema": map[string]any{
@@ -232,6 +254,10 @@ func (s *Server) handleToolsCall(id any, params map[string]any) {
 		result, err = s.toolSearch(args)
 	case "memory_write":
 		result, err = s.toolWrite(args)
+	case "memory_read":
+		result, err = s.toolRead(args)
+	case "memory_delete":
+		result, err = s.toolDelete(args)
 	case "memory_timeline":
 		result, err = s.toolTimeline(args)
 	case "memory_list":
@@ -370,6 +396,43 @@ func (s *Server) toolWrite(args map[string]any) (string, error) {
 	}
 
 	return fmt.Sprintf("✓ Memory written (id: %s, category: %s)", mem.ID[:8], category), nil
+}
+
+func (s *Server) toolRead(args map[string]any) (string, error) {
+	id, _ := args["id"].(string)
+	if id == "" {
+		return "", fmt.Errorf("id is required")
+	}
+	mem, err := s.store.Read(id)
+	if err != nil {
+		return "", err
+	}
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "ID: %s\n", mem.ID)
+	fmt.Fprintf(&sb, "Phase: %s | Category: %s\n", mem.Phase, mem.Category)
+	fmt.Fprintf(&sb, "Created: %s\n", mem.CreatedAt.Format("2006-01-02 15:04"))
+	if mem.Source != "" {
+		fmt.Fprintf(&sb, "Source: %s\n", mem.Source)
+	}
+	if len(mem.Tags) > 0 {
+		fmt.Fprintf(&sb, "Tags: %s\n", strings.Join(mem.Tags, ", "))
+	}
+	if mem.Project != "" {
+		fmt.Fprintf(&sb, "Project: %s\n", mem.Project)
+	}
+	sb.WriteString("\n" + mem.Content)
+	return sb.String(), nil
+}
+
+func (s *Server) toolDelete(args map[string]any) (string, error) {
+	id, _ := args["id"].(string)
+	if id == "" {
+		return "", fmt.Errorf("id is required")
+	}
+	if err := s.store.Delete(id); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("✓ Memory deleted (id: %s)", id), nil
 }
 
 func (s *Server) toolTimeline(args map[string]any) (string, error) {

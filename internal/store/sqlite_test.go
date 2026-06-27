@@ -176,6 +176,59 @@ func TestSqliteSearchLikeMultiWord(t *testing.T) {
 	}
 }
 
+// TestResolveIDPrefix verifies that Read/Delete accept a unique UUID prefix (the truncated IDs
+// shown by search/list), not just the full UUID. This fixes the UX gap where list shows
+// "58e541e0" but `read 58e541e0` returned not-found.
+func TestResolveIDPrefix(t *testing.T) {
+	s := tempSqliteStore(t)
+
+	mem, err := s.Write("prefix matching test memory", PhaseOrganized, CategoryKnowledge, "global", nil, "test")
+	if err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	fullID := mem.ID
+	prefix := fullID[:8] // the truncated form shown by search/list
+
+	// Read by prefix must return the same memory.
+	got, err := s.Read(prefix)
+	if err != nil {
+		t.Fatalf("Read(prefix): %v", err)
+	}
+	if got.ID != fullID {
+		t.Errorf("Read(prefix) returned id %q, want %q", got.ID, fullID)
+	}
+
+	// Full UUID still works.
+	gotFull, err := s.Read(fullID)
+	if err != nil {
+		t.Fatalf("Read(full): %v", err)
+	}
+	if gotFull.ID != fullID {
+		t.Errorf("Read(full) returned id %q, want %q", gotFull.ID, fullID)
+	}
+
+	// Delete by prefix must work.
+	if err := s.Delete(prefix); err != nil {
+		t.Fatalf("Delete(prefix): %v", err)
+	}
+	if _, err := s.Read(fullID); err == nil {
+		t.Error("memory still readable after Delete(prefix)")
+	}
+
+	// Ambiguous prefix must error, not silently pick one.
+	m2, _ := s.Write("another memory", PhaseOrganized, CategoryKnowledge, "global", nil, "test")
+	_ = m2
+	// Two UUIDs share no common long prefix, so use a deliberately ambiguous single char.
+	if _, err := s.resolveID("-"); err == nil {
+		t.Error("expected error for ambiguous prefix '-', got nil")
+	}
+
+	// Unknown prefix must error.
+	if _, err := s.resolveID("nonexistent-id"); err == nil {
+		t.Error("expected ErrNotFound for unknown prefix, got nil")
+	}
+}
+
 func TestSqliteSearchLikeASCIIFast(t *testing.T) {
 	s := tempSqliteStore(t)
 

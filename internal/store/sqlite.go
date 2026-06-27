@@ -207,12 +207,18 @@ func (s *SqliteStore) Write(content string, memType Phase, category Category, sc
 }
 
 func (s *SqliteStore) Read(id string) (*Memory, error) {
-	mem, err := s.FindByID(id)
+	// Resolve prefix → full ID: search/list display truncated IDs (e.g. "58e541e0") but the
+	// user/agent may pass only that prefix. Accept it if it uniquely matches one memory.
+	fullID, err := s.resolveID(id)
+	if err != nil {
+		return nil, err
+	}
+	mem, err := s.FindByID(fullID)
 	if err != nil {
 		return nil, err
 	}
 	_, err = s.db.Exec("UPDATE memories SET access_count = access_count + 1, updated_at = ? WHERE id = ?",
-		time.Now().Format(time.RFC3339), id)
+		time.Now().Format(time.RFC3339), fullID)
 	if err != nil {
 		return nil, err
 	}
@@ -221,8 +227,12 @@ func (s *SqliteStore) Read(id string) (*Memory, error) {
 }
 
 func (s *SqliteStore) Delete(id string) error {
-	s.db.Exec("DELETE FROM memories_fts WHERE memory_id = ?", id)
-	_, err := s.db.Exec("DELETE FROM memories WHERE id = ?", id)
+	fullID, err := s.resolveID(id)
+	if err != nil {
+		return err
+	}
+	s.db.Exec("DELETE FROM memories_fts WHERE memory_id = ?", fullID)
+	_, err = s.db.Exec("DELETE FROM memories WHERE id = ?", fullID)
 	return err
 }
 
@@ -480,6 +490,46 @@ func (s *SqliteStore) ListUnconsumed(processorName string) ([]*Memory, error) {
 	}
 
 	return rawMemories, nil
+}
+
+// resolveID accepts a full UUID or a unique prefix (e.g. the truncated IDs shown by
+// search/list). If `id` matches exactly, it is returned unchanged. Otherwise it looks for a
+// memory whose ID starts with the prefix; if exactly one matches, that full ID is returned.
+// Ambiguous or no matches return an error.
+//
+// This lets users/agents pass "58e541e0" instead of "58e541e0-d74b-4e50-9fa0-b5452d4501f08".
+func (s *SqliteStore) resolveID(id string) (string, error) {
+	if id == "" {
+		return "", fmt.Errorf("%w: empty id", ErrNotFound)
+	}
+	// Exact match first (covers full UUIDs and any exact id).
+	var exact string
+	s.db.QueryRow("SELECT id FROM memories WHERE id = ?", id).Scan(&exact)
+	if exact != "" {
+		return exact, nil
+	}
+	// Prefix match — must be unique.
+	rows, err := s.db.Query("SELECT id FROM memories WHERE id LIKE ?", id+"%")
+	if err != nil {
+		return "", err
+	}
+	defer rows.Close()
+	var match string
+	count := 0
+	for rows.Next() {
+		var rid string
+		rows.Scan(&rid)
+		match = rid
+		count++
+	}
+	switch count {
+	case 0:
+		return "", fmt.Errorf("%w: %s", ErrNotFound, id)
+	case 1:
+		return match, nil
+	default:
+		return "", fmt.Errorf("ambiguous id prefix %q: matches %d memories", id, count)
+	}
 }
 
 func (s *SqliteStore) FindByID(id string) (*Memory, error) {
