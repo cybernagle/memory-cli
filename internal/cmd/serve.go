@@ -47,10 +47,6 @@ var serveCmd = &cobra.Command{
 		if err != nil {
 			return fmt.Errorf("load config: %w", err)
 		}
-		decayThreshold, err := parseDurationConfig(cfg.Daemon.DecayThreshold)
-		if err != nil {
-			return fmt.Errorf("invalid decay_threshold: %w", err)
-		}
 		lockPath := cfg.Storage.Root + "/.daemon.lock"
 		lockFile, err := os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0644)
 		if err != nil {
@@ -94,7 +90,7 @@ var serveCmd = &cobra.Command{
 		}
 
 		// Start daemon
-		d := daemon.New(s, interval, decayThreshold, cfg.Daemon.UpgradeAccess, notifier)
+		d := daemon.New(s, interval, notifier)
 		var pipelineReg *plugin.Registry
 
 		// Reminder task — always enabled (doesn't need LLM, just checks the reminders table

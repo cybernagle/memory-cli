@@ -36,49 +36,23 @@ memory serve
 
 ## Storage Model
 
-Memories progress through two phases across 14 categories:
+Memories progress through phases across 15 categories:
 
 ```
-inbox → organized (classified into a category)
+inbox → processed → organized   (Extract+Merge 加工链)
 ```
 
-```
-~/.memory/
-├── config.yaml
-├── memory.sock
-├── memory.md
-├── pending.md
-└── categories/
-    ├── inbox/          # New, unclassified
-    ├── people/         # People and relationships
-    ├── project/        # Projects, repos, deployments
-    ├── knowledge/      # Technical knowledge, patterns
-    ├── preferences/    # User/agent preferences
-    ├── feedback/       # Feedback and suggestions
-    ├── decisions/      # Design decisions
-    ├── lessons/        # Lessons learned, gotchas
-    ├── habits/         # Behavioral patterns
-    ├── skills/         # Skills and capabilities
-    ├── date/           # Deadlines, schedules
-    ├── soul/           # Core identity, values
-    ├── character/      # Personality traits
-    └── reminders/      # Time-based reminders
-```
+Memories are stored in **SQLite** (`~/.memory/memories.db`), not flat files. Each memory carries:
 
-Each memory is a Markdown file with YAML frontmatter:
+- `phase` — inbox / processed / organized
+- `category` — knowledge / preferences / decisions / project / people / evidence / … (15 total)
+- `metadata` (JSON) — version tracking (`superseded_by`), proposals status, evidence aggregates, provenance (tmux_session, prompt_id, …)
+- `source` — provenance: who/what wrote it (e.g. `claude`, `makro-brain`, `consolidate`, `evidence-task`)
+- `tags`, `links` (bidirectional `[[wikilinks]]`)
 
-```markdown
----
-id: 550e8400-e29b-41d4-a716-446655440000
-phase: organized
-category: preferences
-tags: [preference, ui]
-source: claude
-access_count: 3
-links: [7f8d9e00-...]
----
-user prefers dark mode
-```
+Provenance columns (`tmux_session`, `prompt_id`, user+assistant turns) enable full traceability from any organized memory back to its source conversation.
+
+> **See [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) for the full layered architecture** — 5 layers (foundation → core → domain → orchestration → composition), data-flow diagrams, and the cross-layer rules every feature change should follow.
 
 ## CLI Reference
 
@@ -99,28 +73,23 @@ memory search <query> [--tags ...] [--category ...] [--from YYYY-MM-DD] [--to YY
 
 ### Bidirectional Links
 
-```bash
-memory link <id1> <id2>          # Create bidirectional link
-memory unlink <id1> <id2>        # Remove link
-memory resolve-links             # Resolve [[wikilinks]] in content
-memory backlinks <id>            # Show incoming links
-```
+Memories can reference each other with `[[wikilink]]` syntax. Wikilinks are resolved automatically during ingest, and the `EntityExtractionTask` (daemon) keeps the entity graph + backlinks up to date — no manual link commands needed.
 
-Memories can reference each other with `[[wikilink]]` syntax. `resolve-links` scans all content, extracts wikilinks, and updates link metadata bidirectionally.
+### Processing & Consolidation
 
-### Dream Engine
+The daemon runs an Extract+Merge pipeline (via `factprocessor`, the canonical implementation through the `plugin` contract) plus several background refinement tasks:
 
 ```bash
-memory dream --level 1   # Light: classify inbox into categories
-memory dream --level 2   # Medium: + merge similar + resolve wikilinks
-memory dream --level 3   # Deep: + extract reminders from time expressions
+memory serve            # start daemon: consolidate / enrich / profile / entity / evidence / reminder
 ```
 
-Classification supports both Chinese and English heuristics:
-- "偏好"/"prefers" → `preferences`
-- "教训"/"learned" → `lessons`
-- "决定"/"decided" → `decisions`
-- etc.
+**Daemon tasks** (run on `memory serve`):
+- `ConsolidateLLMTask` — processed → organized (LLM merge)
+- `EnrichTagsTask` — tag enrichment
+- `ProfileTask` — user profile synthesis (→ `character`)
+- `EntityExtractionTask` — LLM entity discovery (fills the entity graph)
+- `EvidenceTask` — proposal accept/reject aggregation (→ `evidence`)
+- `ReminderTask` — due reminders → macOS notifications
 
 ### Notifications
 
@@ -136,15 +105,7 @@ Checks due reminders and pushes macOS notifications. Writes pending reminders to
 memory serve [--interval 60s]
 ```
 
-Starts background daemon (expire, decay, upgrade, consolidate) plus Unix socket server at `~/.memory/memory.sock`.
-
-### Lifecycle
-
-```bash
-memory upgrade <id>       # inbox → organized
-memory decay              # Remove unused organized memories
-memory consolidate        # Run all daemon tasks once
-```
+Starts background daemon (consolidate-llm / enrich / profile / entity-extract / evidence / reminder) plus Unix socket server at `~/.memory/memory.sock`. This is the single entry point for all background processing.
 
 ### Ingestion
 
@@ -172,26 +133,16 @@ memory write "user prefers vim" --category preferences
 memory search "editor preference"
 ```
 
-### Method 2: stdin JSON-RPC
-
-For LLM agents that output JSON tool calls:
+### Method 2: MCP (stdio JSON-RPC) — for Claude Code / zcode / makro
 
 ```bash
-# List available tools
-memory agent --list-tools
-
-# Execute tools via stdin
-echo '[{"name":"memory_write","params":{"content":"hello","category":"knowledge"}}]' | memory agent
-
-# Context-aware prompt
-echo '{"prompt":"user preferences about UI"}' | memory agent --prompt -
+# List tools
+memory mcp
 ```
 
-7 tools available: `memory_write`, `memory_read`, `memory_delete`, `memory_list`, `memory_search`, `memory_tag`, `memory_smart_search`
+Speak JSON-RPC 2.0 over stdio (initialize → tools/call). 6 tools: `memory_ask`, `memory_search`, `memory_write`, `memory_read`, `memory_list`, `memory_search`.
 
-### Method 3: Unix Socket
-
-Persistent connection when daemon is running:
+### Method 3: Unix Socket — persistent connection (daemon running)
 
 ```bash
 # Connect
@@ -232,17 +183,17 @@ timezone: "Asia/Shanghai"
 
 ## Architecture
 
+memory-cli is a **5-layer** system with strict bottom-up dependencies (the dependency graph is a clean DAG — no cycles):
+
 ```
-┌──────────────────────────────────────────────────────────────┐
-│  CLI (Cobra) │ JSON-RPC stdin │ Unix Socket                  │
-├──────────────────────────────────────────────────────────────┤
-│  Agent Framework — 7 tools, hooks, events, session           │
-├──────────────────────────────────────────────────────────────┤
-│  Store — YAML frontmatter files, bidirectional links          │
-├──────────────────────────────────────────────────────────────┤
-│  Daemon — expire, decay, upgrade, consolidate, dream, notify │
-└──────────────────────────────────────────────────────────────┘
+⑤ cmd            — composition root (cobra wiring, 27 subcommands)
+④ daemon/api/mcp/transport — orchestration (scheduling + protocol adapters)
+③ ingest/factprocessor/entity/plugin/dashboard/agent — domain (semantic processing)
+② store          — core storage (SQLite, 12 dependents) ★
+① config/llm/notify/health — foundation (zero internal deps)
 ```
+
+**Full diagram + layer responsibilities + cross-layer rules**: see [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md).
 
 ## Development
 

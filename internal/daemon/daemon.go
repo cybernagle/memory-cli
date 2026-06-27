@@ -28,23 +28,16 @@ type ProcessConfig struct {
 	Threshold   int
 }
 
-func New(s store.Store, interval time.Duration, decayThreshold time.Duration, upgradeAccess int, notifier *notify.MultiNotifier) *Daemon {
-	if decayThreshold == 0 {
-		decayThreshold = 30 * 24 * time.Hour
-	}
-	if upgradeAccess == 0 {
-		upgradeAccess = 3
-	}
+func New(s store.Store, interval time.Duration, notifier *notify.MultiNotifier) *Daemon {
 	return &Daemon{
 		store:    s,
 		interval: interval,
 		notifier: notifier,
-		tasks: []Task{
-			&ExpireTask{},
-			&DecayTask{Threshold: decayThreshold},
-			&UpgradeTask{Threshold: upgradeAccess},
-			&ConsolidateTask{},
-		},
+		// Base tasks start empty: the legacy Expire/Decay/Upgrade/Consolidate tasks were all
+		// no-ops (disabled in the "prevent data loss" pass) and have been removed along with
+		// their commands. Real work is registered by the caller via AddTask (serve.go wires
+		// ConsolidateLLM / EnrichTags / Profile / EntityExtraction / Evidence / Reminder /
+		// Pipeline). Keeping New task-free makes the dependency explicit.
 	}
 }
 
@@ -96,23 +89,4 @@ func (d *Daemon) runTasks() {
 			log.Printf("[%s] processed %d items", task.Name(), count)
 		}
 	}
-}
-
-func RunOnce(s store.Store) map[string]int {
-	results := make(map[string]int)
-	tasks := []Task{
-		&ExpireTask{},
-		&DecayTask{Threshold: 30 * 24 * time.Hour},
-		&UpgradeTask{Threshold: 3},
-		&ConsolidateTask{},
-	}
-	for _, task := range tasks {
-		count, err := task.Run(s)
-		if err != nil {
-			results[task.Name()] = -1
-			continue
-		}
-		results[task.Name()] = count
-	}
-	return results
 }
