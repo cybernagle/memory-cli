@@ -360,6 +360,7 @@ a:hover { text-decoration: underline; }
     <button class="header-tab" data-tab="graph">图谱</button>
     <button class="header-tab" data-tab="search">Search</button>
     <button class="header-tab" data-tab="chat">Chat</button>
+    <button class="header-tab" data-tab="arch">架构</button>
   </div>
 </div>
 
@@ -526,6 +527,58 @@ a:hover { text-decoration: underline; }
         <button id="chatSend">Send</button>
       </div>
     </div>
+  </div>
+
+  <!-- Architecture View -->
+  <div class="arch-view" id="archView" style="display:none;flex-direction:column;padding:16px;overflow:auto;max-height:calc(100vh - 80px)">
+    <div style="margin-bottom:12px">
+      <h2 style="margin:0 0 4px">分层架构</h2>
+      <div style="font-size:12px;color:var(--text2)">依赖方向自底向上（⑤ 依赖 ①-④）；★ = fan-in ≥ 5 的核心包。✦ = 清理后收敛的元素。四个混乱点已全部关闭。</div>
+    </div>
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:16px">
+      <img src="/api/architecture.svg" alt="architecture diagram" style="width:100%;max-width:1100px;display:block;margin:0 auto" />
+    </div>
+
+    <h3 style="margin:8px 0 4px">故障定位速查（症状 → 改哪）</h3>
+    <div style="font-size:12px;color:var(--text2);margin-bottom:8px">出问题时按这张表定位文件，不用全栈翻。</div>
+    <table class="arch-table" style="width:100%;border-collapse:collapse;font-size:13px;margin-bottom:16px">
+      <thead>
+        <tr style="background:var(--surface2)">
+          <th style="text-align:left;padding:8px;border:1px solid var(--border)">症状</th>
+          <th style="text-align:left;padding:8px;border:1px solid var(--border)">改这里</th>
+          <th style="text-align:left;padding:8px;border:1px solid var(--border);width:60px">层</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr><td style="padding:6px 8px;border:1px solid var(--border)">某数据源 ingestion 抓不到/字段缺</td><td style="padding:6px 8px;border:1px solid var(--border);font-family:monospace">ingest/&lt;source&gt;.go</td><td style="padding:6px 8px;border:1px solid var(--border)">③a</td></tr>
+        <tr><td style="padding:6px 8px;border:1px solid var(--border)">ingest 格式解析错</td><td style="padding:6px 8px;border:1px solid var(--border);font-family:monospace">对应 adapter 的 Ingest()</td><td style="padding:6px 8px;border:1px solid var(--border)">③a</td></tr>
+        <tr><td style="padding:6px 8px;border:1px solid var(--border)">提炼的事实不准/漏</td><td style="padding:6px 8px;border:1px solid var(--border);font-family:monospace">factprocessor.go / processor.go 的 extract</td><td style="padding:6px 8px;border:1px solid var(--border)">③b</td></tr>
+        <tr><td style="padding:6px 8px;border:1px solid var(--border)">ask 时间问题识别错</td><td style="padding:6px 8px;border:1px solid var(--border);font-family:monospace">query/intent.go → DetectTimeIntent</td><td style="padding:6px 8px;border:1px solid var(--border)">③c</td></tr>
+        <tr><td style="padding:6px 8px;border:1px solid var(--border)">ask 关键词提得差（噪音）</td><td style="padding:6px 8px;border:1px solid var(--border);font-family:monospace">query/intent.go → LLMExtractKeywords</td><td style="padding:6px 8px;border:1px solid var(--border)">③c</td></tr>
+        <tr><td style="padding:6px 8px;border:1px solid var(--border)">中文搜不到</td><td style="padding:6px 8px;border:1px solid var(--border);font-family:monospace">store/sqlite.go → SearchLike（IDF+前缀）</td><td style="padding:6px 8px;border:1px solid var(--border)">②</td></tr>
+        <tr><td style="padding:6px 8px;border:1px solid var(--border)">版本跟踪误判/不触发</td><td style="padding:6px 8px;border:1px solid var(--border);font-family:monospace">store/versioning.go → CheckAndSupersede</td><td style="padding:6px 8px;border:1px solid var(--border)">②</td></tr>
+        <tr><td style="padding:6px 8px;border:1px solid var(--border)">写入失败</td><td style="padding:6px 8px;border:1px solid var(--border);font-family:monospace">store/sqlite.go → IngestMemory（咽喉点）</td><td style="padding:6px 8px;border:1px solid var(--border)">②</td></tr>
+        <tr><td style="padding:6px 8px;border:1px solid var(--border)">daemon task 不跑</td><td style="padding:6px 8px;border:1px solid var(--border);font-family:monospace">cmd/serve.go → AddTask 注册</td><td style="padding:6px 8px;border:1px solid var(--border)">④/⑤</td></tr>
+        <tr><td style="padding:6px 8px;border:1px solid var(--border)">LLM 抽风/超时</td><td style="padding:6px 8px;border:1px solid var(--border);font-family:monospace">llm/（换模型/prompt/超时）</td><td style="padding:6px 8px;border:1px solid var(--border)">①</td></tr>
+      </tbody>
+    </table>
+
+    <h3 style="margin:8px 0 4px">扩展点（加 component 改哪）</h3>
+    <table class="arch-table" style="width:100%;border-collapse:collapse;font-size:13px">
+      <thead>
+        <tr style="background:var(--surface2)">
+          <th style="text-align:left;padding:8px;border:1px solid var(--border)">要加什么</th>
+          <th style="text-align:left;padding:8px;border:1px solid var(--border)">步骤</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr><td style="padding:6px 8px;border:1px solid var(--border)">新数据源</td><td style="padding:6px 8px;border:1px solid var(--border)">ingest/ 加 adapter（实现 Adapter 接口）→ plugin 注册 → serve.go RegisterIngest</td></tr>
+        <tr><td style="padding:6px 8px;border:1px solid var(--border)">新后台 task</td><td style="padding:6px 8px;border:1px solid var(--border)">daemon/ 加 Task 实现（Name+Run）→ serve.go AddTask 注册</td></tr>
+        <tr><td style="padding:6px 8px;border:1px solid var(--border)">新 MCP tool</td><td style="padding:6px 8px;border:1px solid var(--border)">mcp/server.go 加 tool 定义 + handleToolsCall switch + toolXxx()</td></tr>
+        <tr><td style="padding:6px 8px;border:1px solid var(--border);color:var(--text2)">新 Extract+Merge 线</td><td style="padding:6px 8px;border:1px solid var(--border);color:var(--text2)">⚠ 不要新增。改 factprocessor（可插拔）/ processor（带 SSE 追踪）</td></tr>
+      </tbody>
+    </table>
+    <div style="font-size:11px;color:var(--text2);margin-top:12px">权威文档：docs/ARCHITECTURE.md。跨层规则：依赖只能向下；语义判断不上浮到 store；管线只有两条（factprocessor/processor）。</div>
   </div>
 
   <!-- Entity Graph View -->
@@ -922,6 +975,7 @@ function switchTab(tab) {
   document.getElementById('searchView').classList.toggle('active', tab === 'search');
   document.getElementById('chatView').classList.toggle('active', tab === 'chat');
   document.getElementById('graphView').style.display = tab === 'graph' ? 'flex' : 'none';
+  document.getElementById('archView').style.display = tab === 'arch' ? 'flex' : 'none';
   if (tab === 'search' && !document.getElementById('sqCategory').dataset.loaded) {
     loadSearchFilters();
   }

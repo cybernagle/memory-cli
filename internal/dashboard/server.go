@@ -37,6 +37,7 @@ func NewServer(s Store, llmClient *llm.Client) *Server {
 	mux.HandleFunc("GET /api/entity-graph/memories", srv.handleEntityMemories)
 	mux.HandleFunc("POST /api/ask", srv.handleAsk)
 	mux.HandleFunc("POST /api/ask/agent", srv.handleAskAgent)
+	mux.HandleFunc("GET /api/architecture.svg", srv.handleArchitectureSVG)
 	mux.HandleFunc("GET /", srv.handleIndex)
 
 	srv.mux = mux
@@ -65,5 +66,17 @@ func (srv *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Write(data)
+}
+
+// handleArchitectureSVG serves the embedded architecture diagram for the dashboard's 架构 tab.
+// It lives in assets/ (go:embed) so the binary is self-contained.
+func (srv *Server) handleArchitectureSVG(w http.ResponseWriter, r *http.Request) {
+	data, err := fs.ReadFile(assetsFS, "assets/architecture.svg")
+	if err != nil {
+		http.Error(w, "architecture diagram not found", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "image/svg+xml")
 	w.Write(data)
 }
