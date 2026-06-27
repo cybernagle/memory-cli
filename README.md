@@ -1,5 +1,7 @@
 # Memory CLI
 
+> **English** | [中文](./README.zh-CN.md)
+
 Unified memory management for multiple AI agents.
 
 Agents (Claude Code, Copilot, FingerSaver, etc.) read, write, search, and consolidate memories through CLI, JSON-RPC over stdin, or persistent Unix socket. A background daemon continuously classifies, links, and refines stored memories.
@@ -171,8 +173,6 @@ storage:
 
 daemon:
   interval: 60s
-  decay_threshold: 720h   # 30 days
-  upgrade_access_threshold: 3
 
 notification:
   enabled: true
