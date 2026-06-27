@@ -1,5 +1,9 @@
 # Memory-CLI 架构诊断：能否扛起"个人第二大脑"的记忆层
 
+> ⚠️ **历史快照（2026-06-19）**。本文是当时的诊断记录，保留原样。
+> 当前权威分层文档是 [`ARCHITECTURE.md`](./ARCHITECTURE.md)（含 architecture.svg）。
+> 本文部分判断已被后续清理推翻——例如"dream 引擎几乎全灭"中的 dream 引擎已在 2026-06-27 整体删除（commit `4336e9b`）；四个架构混乱点已全部关闭，详见 ARCHITECTURE.md。
+
 > 日期：2026-06-19
 > 上下文：memory-cli 作为"记忆"角色，配合 makro（手脚+主动大脑）和用户构成闭环。
 > 本文只评估 memory-cli 这一层，不设计 makro 的大脑/调度。

@@ -140,7 +140,7 @@ memory search "editor preference"
 memory mcp
 ```
 
-Speak JSON-RPC 2.0 over stdio (initialize → tools/call). 6 tools: `memory_ask`, `memory_search`, `memory_write`, `memory_read`, `memory_list`, `memory_search`.
+Speak JSON-RPC 2.0 over stdio (initialize → tools/call). 8 tools: `memory_ask`, `memory_search`, `memory_write`, `memory_read`, `memory_delete`, `memory_timeline`, `memory_list`, `memory_remind`.
 
 ### Method 3: Unix Socket — persistent connection (daemon running)
 

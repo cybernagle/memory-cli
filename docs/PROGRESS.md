@@ -1,8 +1,36 @@
 # Memory-CLI 进度落盘
 
-> 最近更新：2026-06-20 00:45
+> 最近更新：2026-06-27（追加架构清理阶段）
 > 当前分支：main
-> 最新 commit：`647cdf2` + 未提交的 P3 #18（EvidenceTask）
+> 最新 commit：`79b3c77`（架构分层清理完成，四个混乱点全部关闭）
+> 历史里程碑：commit `647cdf2` + P3 #18（EvidenceTask）
+
+---
+
+## 架构清理阶段（2026-06-27，5 轮迭代，全部 e2e 验证）
+
+目标：建立清晰的分层契约，消除失控感。5 轮清理后**架构分层干净**——依赖图无循环，四个混乱点全部关闭。
+
+### 完成的收敛（commits `4336e9b`→`79b3c77`）
+
+| Commit | 内容 | 架构混乱点 |
+|--------|------|-----------|
+| `4336e9b` | 命令清理 27→18（删 dream/decay/agent/consolidate/process/upgrade/link 等 10 个废弃/重复命令 + 5 个 daemon no-op task） | — |
+| `19ed0d0` | MCP 补 read/delete tool（6→8）+ store Read/Delete 支持 UUID 前缀匹配 | — |
+| `220ab73` | 新建 `internal/query` 公共包，dashboard 与 mcp 共用查询理解逻辑（净删 274 行） | ④ ✅ 收敛 |
+| `8fe67a5` | `IngestMemory` 统一写入咽喉点 + supersede 提交后原子触发（所有写入路径自动版本跟踪） | ② ✅ 收敛 |
+| `79b3c77` | 版本跟踪逻辑抽到 `store/versioning.go`（职责整理） | ③ ✅ 作废（依据错） |
+
+### 四个混乱点最终状态
+
+| 混乱点 | 状态 | 处理 |
+|--------|------|------|
+| ① 三套 Extract+Merge | ✅ 澄清 | processor/factprocessor 是正交两维度（SSE 追踪 vs 可插拔契约），非重复，不作收敛 |
+| ② 写入入口分散（17处）| ✅ 收敛 | IngestMemory 单一咽喉点，supersede 自动触发 |
+| ③ 版本跟踪错位 | ✅ 作废 | 原依据错（纯文本相似度，不用 entity/predicate）；仅做职责整理抽到 versioning.go |
+| ④ MCP 复制 dashboard ask | ✅ 收敛 | internal/query 公共包 |
+
+**权威分层文档**：`docs/ARCHITECTURE.md`（含 architecture.svg）。`ARCHITECTURE_DIAGNOSIS.md`/`RECONCILE.md` 是 6/19 的历史快照。
 
 ---
 
