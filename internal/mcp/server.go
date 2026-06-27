@@ -13,16 +13,15 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log"
 	"os"
-	"regexp"
 	"strings"
 	"time"
 
 	"github.com/cybernagle/memory-cli/internal/config"
 	"github.com/cybernagle/memory-cli/internal/daemon"
 	"github.com/cybernagle/memory-cli/internal/llm"
+	"github.com/cybernagle/memory-cli/internal/query"
 	"github.com/cybernagle/memory-cli/internal/store"
 )
 
@@ -553,23 +552,21 @@ func (s *Server) toolRemind(args map[string]any) (string, error) {
 	return fmt.Sprintf("✓ Reminder set: %s at %s (id: %s)", content, triggerAt.Format("2006-01-02 15:04"), reminder.ID[:8]), nil
 }
 
-// runAskWorkflowMCP is a standalone version of the dashboard workflow that works with the
-// MCP server's store/llm directly (no HTTP context). It delegates to the same intent
-// detection + search logic, but runs with context.Background() instead of *http.Request.
+// runAskWorkflowMCP handles memory_ask. It delegates the query-understanding steps (time
+// intent, keyword extraction, CJK split, snippet) to the shared internal/query package — the
+// same one the dashboard uses — so the two entry points can't drift apart. The agent calling
+// this tool is itself an LLM that understands context, so unlike the dashboard we skip the
+// resolveContext/follow-up-merge stage and go straight to intent detection + search.
 func runAskWorkflowMCP(s *Server, question string, history []chatMessage) (string, map[string]any) {
-	// For MCP, we delegate to the search + LLM path directly. The agent (Claude/GPT) calling
-	// this tool is itself an LLM that understands context — so we don't need the full
-	// resolveContext stage. But we DO want intent detection + proper search.
-
-	// Simple intent check: if it's a time query, do timeline. Otherwise do entity search.
-	if dr, ok := detectTimeIntentStandalone(question); ok {
-		items, err := s.store.List(store.ListOptions{CreatedAfter: &dr.from, CreatedBefore: &dr.to, Limit: 500})
+	// Time-scoped question? Summarize the activity timeline for that range.
+	if dr, ok := query.DetectTimeIntent(question); ok {
+		items, err := s.store.List(store.ListOptions{CreatedAfter: &dr.From, CreatedBefore: &dr.To, Limit: 500})
 		if err != nil || len(items) == 0 {
-			return fmt.Sprintf("%s 没有记忆记录。", dr.label), nil
+			return fmt.Sprintf("%s 没有记忆记录。", dr.Label), nil
 		}
 		if s.llm != nil {
 			var sb strings.Builder
-			sb.WriteString(fmt.Sprintf("总结用户在 %s 的活动（共%d条）。用中文。\n\n", dr.label, len(items)))
+			sb.WriteString(fmt.Sprintf("总结用户在 %s 的活动（共%d条）。用中文。\n\n", dr.Label, len(items)))
 			for i, m := range items {
 				if i >= 80 {
 					break
@@ -584,17 +581,17 @@ func runAskWorkflowMCP(s *Server, question string, history []chatMessage) (strin
 			defer cancel()
 			ans, err := s.llm.Chat(ctx, sb.String())
 			if err == nil && ans != "" {
-				return ans, map[string]any{"date": dr.label, "count": len(items)}
+				return ans, map[string]any{"date": dr.Label, "count": len(items)}
 			}
 		}
-		return fmt.Sprintf("%d 条记忆，时间范围 %s", len(items), dr.label), map[string]any{"count": len(items)}
+		return fmt.Sprintf("%d 条记忆，时间范围 %s", len(items), dr.Label), map[string]any{"count": len(items)}
 	}
 
-	// Entity search path: extract keywords + search all phases via SearchLike.
+	// Entity search path: extract keywords + search all phases.
 	searchQuery := ""
 	if s.llm != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-		kw, err := llmExtractKeywordsStandalone(ctx, s.llm, question)
+		kw, err := query.LLMExtractKeywords(ctx, s.llm, question)
 		cancel()
 		if err == nil && strings.TrimSpace(kw) != "" {
 			searchQuery = kw
@@ -602,7 +599,7 @@ func runAskWorkflowMCP(s *Server, question string, history []chatMessage) (strin
 	}
 	if searchQuery == "" {
 		// LLM failed or returned empty — use CJK split fallback.
-		searchQuery = splitCJKKeywordsImpl(question)
+		searchQuery = query.SplitCJKKeywords(question)
 	}
 
 	// Search all phases. Exclude auto-generated aggregates (proposal evidence, profile
@@ -622,12 +619,13 @@ func runAskWorkflowMCP(s *Server, question string, history []chatMessage) (strin
 		combined = combined[:20]
 	}
 
-	// Build context for LLM.
+	// Build context for LLM, centering snippets on the matched keywords.
+	snippetKWs := query.SplitKeywordsForSnippet(searchQuery)
 	var sb strings.Builder
 	for i, m := range combined {
 		c := m.Content
 		if len(c) > 300 {
-			c = extractSnippetStandalone(c, searchQuery, 300)
+			c = query.ExtractSnippet(c, snippetKWs, 300)
 		}
 		dateStr := m.CreatedAt.Format("2006-01-02")
 		if m.Phase == store.PhaseOrganized || m.Phase == store.PhaseProcessed {
@@ -666,151 +664,10 @@ Answer concisely in the user's language:`, sb.String(), question)
 	return result, map[string]any{"count": len(combined)}
 }
 
-// ─── Standalone helpers (no dependency on dashboard package) ───
-
+// chatMessage is a single turn of conversation history (passed by the MCP client so follow-up
+// questions can be resolved). Kept here because the MCP protocol layer owns it.
 type chatMessage struct {
 	Role    string `json:"role"`
 	Content string `json:"content"`
 }
-
-// detectTimeIntentStandalone checks for time-based questions (simplified standalone version).
-func detectTimeIntentStandalone(question string) (*dateRangeStandalone, bool) {
-	now := time.Now()
-	loc := now.Location()
-	lower := strings.ToLower(question)
-
-	if strings.Contains(question, "今天") || strings.Contains(lower, "today") {
-		s := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc)
-		return &dateRangeStandalone{from: s, to: s.Add(24*time.Hour - time.Second), label: s.Format("2006-01-02")}, true
-	}
-	if strings.Contains(question, "昨天") || strings.Contains(lower, "yesterday") {
-		d := now.AddDate(0, 0, -1)
-		s := time.Date(d.Year(), d.Month(), d.Day(), 0, 0, 0, 0, loc)
-		return &dateRangeStandalone{from: s, to: s.Add(24*time.Hour - time.Second), label: s.Format("2006-01-02")}, true
-	}
-	return nil, false
-}
-
-type dateRangeStandalone struct {
-	from, to time.Time
-	label    string
-}
-
-func llmExtractKeywordsStandalone(ctx context.Context, c *llm.Client, question string) (string, error) {
-	prompt := fmt.Sprintf(`Extract 2-5 search keywords from this question for a full-text search engine.
-Rules:
-- Output the KEYWORDS ONLY, space-separated, no explanation
-- Keep proper nouns intact
-- For Chinese, output individual meaningful words, not whole phrases
-- Remove question words (什么, 怎么, 吗, 的, 是)
-
-Question: %s
-
-Keywords:`, question)
-
-	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
-	defer cancel()
-
-	resp, err := c.ChatWithModel(ctx, "glm-4.7-flash", prompt, 100)
-	if err != nil {
-		return "", err
-	}
-	resp = strings.TrimSpace(resp)
-	if idx := strings.IndexByte(resp, '\n'); idx > 0 {
-		resp = resp[:idx]
-	}
-	resp = strings.Trim(resp, "`\"'.,")
-	fields := strings.Fields(resp)
-	if len(fields) == 0 {
-		return "", fmt.Errorf("empty keywords")
-	}
-	return strings.Join(fields, " OR "), nil
-}
-
-func extractSnippetStandalone(content, searchQuery string, windowSize int) string {
-	bestPos := -1
-	contentLower := strings.ToLower(content)
-	for _, kw := range strings.Split(strings.ReplaceAll(strings.ToLower(searchQuery), " or ", "|"), "|") {
-		kw = strings.TrimSpace(kw)
-		if kw == "" {
-			continue
-		}
-		if idx := strings.Index(contentLower, strings.ToLower(kw)); idx >= 0 {
-			bestPos = idx
-			break
-		}
-	}
-	if bestPos < 0 {
-		bestPos = 0
-	}
-	start := bestPos - 100
-	if start < 0 {
-		start = 0
-	}
-	end := start + windowSize
-	if end > len(content) {
-		end = len(content)
-	}
-	result := content[start:end]
-	if start > 0 {
-		result = "..." + result
-	}
-	if end < len(content) {
-		result += "..."
-	}
-	return result
-}
-
-// splitCJKKeywords extracts searchable keywords from a Chinese question by splitting
-// CJK runs into short prefixes and keeping ASCII words intact.
-func splitCJKKeywordsImpl(question string) string {
-	var tokens []string
-	var cjkBuf strings.Builder
-	flushCJK := func() {
-		seg := cjkBuf.String()
-		cjkBuf.Reset()
-		if seg == "" {
-			return
-		}
-		runes := []rune(seg)
-		n := 3
-		if n > len(runes) {
-			n = len(runes)
-		}
-		if n >= 2 {
-			tokens = append(tokens, string(runes[:n]))
-		}
-	}
-
-	for _, r := range question {
-		if r >= '\u4e00' && r <= '\u9fff' {
-			cjkBuf.WriteRune(r)
-		} else {
-			flushCJK()
-		}
-	}
-	flushCJK()
-
-	// Also extract ASCII words.
-	for _, m := range regexp.MustCompile(`[A-Za-z0-9.-]{2,}`).FindAllString(question, -1) {
-		tokens = append(tokens, m)
-	}
-
-	// Dedup.
-	seen := make(map[string]bool)
-	var out []string
-	for _, t := range tokens {
-		if !seen[t] {
-			seen[t] = true
-			out = append(out, t)
-		}
-	}
-	if len(out) == 0 {
-		return question
-	}
-	return strings.Join(out, " OR ")
-}
-
-// Suppress unused import warning.
-var _ io.Reader = (*os.File)(nil)
 var _ = log.Printf

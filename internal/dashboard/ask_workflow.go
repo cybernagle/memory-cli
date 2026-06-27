@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/cybernagle/memory-cli/internal/llm"
+	"github.com/cybernagle/memory-cli/internal/query"
 	"github.com/cybernagle/memory-cli/internal/store"
 )
 
@@ -39,7 +39,7 @@ type askContext struct {
 	extra            map[string]any // metadata for the response (date, count, etc.)
 
 	// ── Intent-specific params (set by Stage 2) ──
-	dateRange    *dateRange
+	dateRange    *query.DateRange
 	entityKw     string
 	relationPair [2]string
 }
@@ -182,14 +182,14 @@ func stageDetectIntent(ctx *askContext) bool {
 	q := ctx.resolvedQuestion
 
 	// Time intent.
-	if dr, ok := detectTimeIntent(q); ok {
+	if dr, ok := query.DetectTimeIntent(q); ok {
 		ctx.intent = "time"
 		ctx.dateRange = dr
 		return true
 	}
 
 	// Aggregate/list intent.
-	if detectAggregateIntent(q) {
+	if query.DetectAggregateIntent(q) {
 		ctx.intent = "aggregate"
 		// Extract entity keyword for the aggregate fetch.
 		for _, kw := range []string{"合同", "企业", "公司", "客户"} {
@@ -202,7 +202,7 @@ func stageDetectIntent(ctx *askContext) bool {
 	}
 
 	// Relation intent.
-	if detectRelationIntent(q) {
+	if query.DetectRelationIntent(q) {
 		if a, b, ok := extractRelationPair(q); ok {
 			ctx.intent = "relation"
 			ctx.relationPair = [2]string{a, b}
@@ -234,17 +234,17 @@ func extractRelationPair(question string) (string, string, bool) {
 func stageFetchTime(ctx *askContext) bool {
 	dr := ctx.dateRange
 	items, err := ctx.srv.store.impl.List(store.ListOptions{
-		CreatedAfter:  &dr.from,
-		CreatedBefore: &dr.to,
+		CreatedAfter:  &dr.From,
+		CreatedBefore: &dr.To,
 		Limit:         500,
 	})
 	if err != nil || len(items) == 0 {
-		ctx.answer = fmt.Sprintf("%s 没有记忆记录。", dr.label)
+		ctx.answer = fmt.Sprintf("%s 没有记忆记录。", dr.Label)
 		return false
 	}
 	sort.Slice(items, func(i, j int) bool { return items[i].CreatedAt.Before(items[j].CreatedAt) })
 	ctx.results = items
-	ctx.extra["date"] = dr.label
+	ctx.extra["date"] = dr.Label
 	ctx.extra["count"] = len(items)
 	return true
 }
@@ -338,14 +338,14 @@ func stageFetchEntity(ctx *askContext) bool {
 	// Extract search keywords via LLM. If LLM fails, split CJK segments into short prefixes.
 	searchQuery := ctx.resolvedQuestion
 	if ctx.srv.llm != nil {
-		kw, err := llmExtractKeywords(ctx.r.Context(), ctx.srv.llm, ctx.resolvedQuestion)
+		kw, err := query.LLMExtractKeywords(ctx.r.Context(), ctx.srv.llm, ctx.resolvedQuestion)
 		if err == nil && kw != "" {
 			searchQuery = kw
 		} else {
-			searchQuery = splitCJKKeywords(ctx.resolvedQuestion)
+			searchQuery = query.SplitCJKKeywords(ctx.resolvedQuestion)
 		}
 	} else {
-		searchQuery = splitCJKKeywords(ctx.resolvedQuestion)
+		searchQuery = query.SplitCJKKeywords(ctx.resolvedQuestion)
 	}
 	ctx.extra["searchQuery"] = searchQuery
 
@@ -430,57 +430,9 @@ func stageSnippet(ctx *askContext) bool {
 		if len(m.Content) <= 300 {
 			continue
 		}
-		m.Content = extractSnippet(m.Content, snippetKWs, 300)
+		m.Content = query.ExtractSnippet(m.Content, snippetKWs, 300)
 	}
 	return true
-}
-
-// extractSnippet centers a window on the first keyword found in content.
-func extractSnippet(content string, keywords []string, windowSize int) string {
-	bestPos := -1
-	contentLower := strings.ToLower(content)
-	for _, kw := range keywords {
-		kw = strings.TrimSpace(kw)
-		if kw == "" {
-			continue
-		}
-		kwLower := strings.ToLower(kw)
-		if idx := strings.Index(contentLower, kwLower); idx >= 0 {
-			bestPos = idx
-			break
-		}
-		// Try shorter CJK prefixes.
-		runes := []rune(kw)
-		for n := len(runes) - 1; n >= 2; n-- {
-			sub := strings.ToLower(string(runes[:n]))
-			if idx := strings.Index(contentLower, sub); idx >= 0 {
-				bestPos = idx
-				break
-			}
-		}
-		if bestPos >= 0 {
-			break
-		}
-	}
-	if bestPos < 0 {
-		bestPos = 0
-	}
-	start := bestPos - 100
-	if start < 0 {
-		start = 0
-	}
-	end := start + windowSize
-	if end > len(content) {
-		end = len(content)
-	}
-	result := content[start:end]
-	if start > 0 {
-		result = "..." + result
-	}
-	if end < len(content) {
-		result += "..."
-	}
-	return result
 }
 
 // ─── Stage 6: Build Prompt (intent-specific) ───
@@ -488,7 +440,7 @@ func extractSnippet(content string, keywords []string, windowSize int) string {
 func stageBuildTimelinePrompt(ctx *askContext) bool {
 	dr := ctx.dateRange
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("以下是用户在 %s 的活动记录（共%d条）。请总结用户这段时间做了什么、想了什么。用中文回答。\n\n", dr.label, len(ctx.results)))
+	sb.WriteString(fmt.Sprintf("以下是用户在 %s 的活动记录（共%d条）。请总结用户这段时间做了什么、想了什么。用中文回答。\n\n", dr.Label, len(ctx.results)))
 	for i, m := range ctx.results {
 		if i >= 100 {
 			sb.WriteString(fmt.Sprintf("... 共 %d 条\n", len(ctx.results)))
@@ -616,52 +568,3 @@ func stageGenerate(ctx *askContext) bool {
 	return true
 }
 
-// splitCJKKeywords extracts searchable keywords from a Chinese question by splitting
-// CJK character runs into 2-3 char segments (like 瑞福莱 → 瑞福莱) and keeping ASCII
-// words intact. This is a fallback when LLM keyword extraction fails — it's less precise
-// but far better than using the full long sentence as a LIKE query (which matches nothing).
-func splitCJKKeywords(question string) string {
-	var tokens []string
-	re := regexp.MustCompile(`[A-Za-z0-9.-]{2,}|[\p{Han}]+`)
-	for _, m := range re.FindAllString(question, -1) {
-		if isCJK(m) {
-			// CJK segment: take first 3 chars as the search token (most distinctive part).
-			runes := []rune(m)
-			if len(runes) >= 2 {
-				n := 3
-				if n > len(runes) {
-					n = len(runes)
-				}
-				tokens = append(tokens, string(runes[:n]))
-			}
-		} else if len(m) >= 2 {
-			// ASCII word.
-			tokens = append(tokens, m)
-		}
-	}
-	// Dedup.
-	seen := make(map[string]bool)
-	var out []string
-	for _, t := range tokens {
-		if !seen[t] {
-			seen[t] = true
-			out = append(out, t)
-		}
-	}
-	if len(out) == 0 {
-		return question
-	}
-	return strings.Join(out, " OR ")
-}
-
-func isCJK(s string) bool {
-	for _, r := range s {
-		if r >= '\u4e00' && r <= '\u9fff' {
-			return true
-		}
-	}
-	return false
-}
-
-// Ensure unused imports are referenced (llm is used by llmExtractKeywords in handlers.go).
-var _ = llm.Client{}
