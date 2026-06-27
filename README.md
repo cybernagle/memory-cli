@@ -186,9 +186,9 @@ timezone: "Asia/Shanghai"
 memory-cli is a **5-layer** system with strict bottom-up dependencies (the dependency graph is a clean DAG — no cycles):
 
 ```
-⑤ cmd            — composition root (cobra wiring, 27 subcommands)
+⑤ cmd            — composition root (cobra wiring, 18 subcommands)
 ④ daemon/api/mcp/transport — orchestration (scheduling + protocol adapters)
-③ ingest/factprocessor/entity/plugin/dashboard/agent — domain (semantic processing)
+③ ingest/factprocessor/entity/plugin/query/dashboard/agent — domain (semantic processing)
 ② store          — core storage (SQLite, 12 dependents) ★
 ① config/llm/notify/health — foundation (zero internal deps)
 ```
