@@ -11,18 +11,23 @@ import (
 )
 
 // EvidenceTask implements RECONCILE P3 #18: sediment accept/reject signal onto per-topic
-// preference memories so the brain (makro) can query "what is the user's acceptance rate for
+// evidence memories so the brain (makro) can query "what is the user's acceptance rate for
 // topic X" without rescanning every proposal.
 //
 // It is the fine-grained counterpart to ProfileTask. ProfileTask writes ONE global character
 // memory ("user overall likes Rust, rejects Python"). EvidenceTask writes MANY per-domain
-// preference memories ("topic: Debugging — accept_rate 0.0, 1 reject: 'memory system duplicated'").
+// evidence memories ("topic: Debugging — accept_rate 0.0, 1 reject: 'memory system duplicated'").
+//
+// IMPORTANT: EvidenceTask writes to CategoryEvidence, NOT CategoryPreferences. The aggregate
+// accept/reject stats are fitting signal for the brain, not user preferences — putting them in
+// preferences polluted semantic search (e.g. "这个用户是谁" surfaced "[topic: writing]
+// accept_rate=0.00" instead of "User prefers Go over Python"). See CategoryEvidence docs.
 //
 // Pipeline:
 //  1. Scan proposals with a non-pending status (metadata.status ∈ accepted|rejected|ignored)
 //     plus feedback memories carrying a verdict (metadata.verdict).
 //  2. Bucket each verdict by its domain/topic.
-//  3. For each domain: find or create a preference memory owned by this task
+//  3. For each domain: find or create an evidence memory owned by this task
 //     (source=evidence-task, metadata.topic=<domain>) and atomically merge in:
 //     metadata.evidence      = [{type, proposal_id, topic, reason, at}, ...]
 //     metadata.accept_rate   = accepted / (accepted+rejected+ignored)
@@ -31,7 +36,7 @@ import (
 //
 // It is idempotent: rerunning recomputes from the raw verdicts, so correcting a mislabeled
 // domain just requires fixing the source proposal. The per-topic memory content is a compact
-// human-readable summary so it also surfaces in normal preference searches.
+// human-readable summary so it also surfaces in normal evidence searches.
 type EvidenceTask struct {
 	Store *store.SqliteStore
 }
@@ -173,7 +178,7 @@ func (t *EvidenceTask) bucketByDomain(vs []verdict) map[string][]verdict {
 	return buckets
 }
 
-// writeDomainEvidence finds (or creates) the per-domain preference memory owned by this task,
+// writeDomainEvidence finds (or creates) the per-domain evidence memory owned by this task,
 // then atomically merges the recomputed evidence + accept_rate into its metadata. Content is
 // rewritten so the memory is discoverable via normal content search too.
 func (t *EvidenceTask) writeDomainEvidence(domain string, vs []verdict) error {
@@ -235,11 +240,18 @@ func (t *EvidenceTask) writeDomainEvidence(domain string, vs []verdict) error {
 	return nil
 }
 
-// findOrCreateTopicMemory returns the id of the evidence-task-owned preference memory for a
+// findOrCreateTopicMemory returns the id of the evidence-task-owned evidence memory for a
 // domain, creating it on first encounter. Lookup is by source + metadata.topic so the row is
 // stable across runs (idempotent upsert by domain). Uses metadata LIKE since proposal volume is
 // low — no index needed (see ARCHITECTURE_DIAGNOSIS §5 / RECONCILE §5.2).
+//
+// Also handles migration of legacy evidence rows that were written to CategoryPreferences
+// before the CategoryEvidence split: any source=evidence-task row found in preferences is
+// rewritten to evidence in place by category, so existing deployments migrate automatically.
 func (t *EvidenceTask) findOrCreateTopicMemory(domain string) (string, error) {
+	// First, migrate any legacy rows still sitting in CategoryPreferences.
+	t.migrateLegacyPreferenceRows()
+
 	// Match the topic field on our own rows only. Quoting the JSON value guards against quotes
 	// in domain names; domains are LLM-generated category words so they are plain, but be safe.
 	needle := fmt.Sprintf(`"topic":"%s"`, domain)
@@ -256,7 +268,7 @@ func (t *EvidenceTask) findOrCreateTopicMemory(domain string) (string, error) {
 	mem := &store.Memory{
 		Content:   fmt.Sprintf("[topic: %s] (pending evidence)", domain),
 		Phase:     store.PhaseOrganized,
-		Category:  store.CategoryPreferences,
+		Category:  store.CategoryEvidence,
 		Scope:     "global",
 		Tags:      []string{"evidence", "auto-generated"},
 		Source:    "evidence-task",
@@ -267,6 +279,22 @@ func (t *EvidenceTask) findOrCreateTopicMemory(domain string) (string, error) {
 		return "", err
 	}
 	return mem.ID, nil
+}
+
+// migrateLegacyPreferenceRows moves any source=evidence-task memories that are still filed
+// under CategoryPreferences over to CategoryEvidence. This is a no-op once migrated. It runs
+// once per EvidenceTask tick until the legacy rows are gone (idempotent, cheap — low volume).
+func (t *EvidenceTask) migrateLegacyPreferenceRows() {
+	res, err := t.Store.DB().Exec(
+		"UPDATE memories SET category = ? WHERE source = 'evidence-task' AND category = ?",
+		string(store.CategoryEvidence), string(store.CategoryPreferences),
+	)
+	if err != nil {
+		return
+	}
+	if n, _ := res.RowsAffected(); n > 0 {
+		log.Printf("[evidence] migrated %d legacy rows from preferences → evidence", n)
+	}
 }
 
 // normalizeVerdict maps the various status strings (from proposals.status and feedback.verdict)

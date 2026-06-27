@@ -35,13 +35,19 @@ const (
 	CategoryCapture Category = "capture"
 	// CategoryProposals holds brain-generated proposals with a status state machine in metadata.
 	CategoryProposals Category = "proposals"
+	// CategoryEvidence holds per-domain accept/reject aggregates sedimented by EvidenceTask.
+	// It is the fine-grained counterpart to CategoryCharacter: Character is the global profile,
+	// Evidence is the per-topic breakdown ("topic: writing — 0 accept / 1 ignore"). These are
+	// statistical aggregates, NOT user preferences, so they live apart from CategoryPreferences
+	// to avoid polluting semantic preference searches ("User prefers Go", "React").
+	CategoryEvidence Category = "evidence"
 )
 
 var AllCategories = []Category{
 	CategorySoul, CategoryCharacter, CategoryPeople, CategoryProject,
 	CategoryDate, CategoryKnowledge, CategoryFeedback, CategoryPreferences,
 	CategoryDecisions, CategoryLessons, CategoryHabits, CategorySkills,
-	CategoryCapture, CategoryProposals,
+	CategoryCapture, CategoryProposals, CategoryEvidence,
 }
 
 type Memory struct {

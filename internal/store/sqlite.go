@@ -813,7 +813,19 @@ func (s *SqliteStore) SearchLike(opts SearchOptions) ([]*Memory, error) {
 		}
 	}
 
+	// Build an O(1) lookup for excluded sources so the per-memory loop stays cheap.
+	excludedSources := make(map[string]bool, len(opts.ExcludeSources))
+	for _, src := range opts.ExcludeSources {
+		excludedSources[src] = true
+	}
+
 	for _, mem := range memories {
+		// Drop auto-generated aggregates (evidence/profile signal) from semantic search results.
+		// They're statistical fitting signal for the brain, not user-facing facts, and their
+		// constantly-updated timestamps let them crowd out real memories in recency ranking.
+		if excludedSources[mem.Source] {
+			continue
+		}
 		contentLower := strings.ToLower(mem.Content)
 		score := 0.0
 		for kwi, kw := range keywords {

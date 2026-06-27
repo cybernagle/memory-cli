@@ -96,22 +96,22 @@ func TestEvidenceTaskIsIdempotent(t *testing.T) {
 	if n2 != 2 {
 		t.Fatalf("second run wrote %d, want 2 (same domains, no new rows)", n2)
 	}
-	// Count evidence-task-owned preference memories: should still be exactly 2.
-	rows, err := s.List(store.ListOptions{Category: store.CategoryPreferences, Source: "evidence-task", Limit: 100})
+	// Count evidence-task-owned evidence memories: should still be exactly 2.
+	rows, err := s.List(store.ListOptions{Category: store.CategoryEvidence, Source: "evidence-task", Limit: 100})
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
 	if len(rows) != 2 {
-		t.Errorf("evidence-task preference rows = %d, want 2", len(rows))
+		t.Errorf("evidence-task evidence rows = %d, want 2", len(rows))
 	}
 }
 
-// findEvidenceMemory loads the evidence-task preference memory for a domain by metadata.topic.
+// findEvidenceMemory loads the evidence-task evidence memory for a domain by metadata.topic.
 func findEvidenceMemory(t *testing.T, s *store.SqliteStore, domain string) *store.Memory {
 	t.Helper()
-	rows, err := s.List(store.ListOptions{Category: store.CategoryPreferences, Source: "evidence-task", Limit: 100})
+	rows, err := s.List(store.ListOptions{Category: store.CategoryEvidence, Source: "evidence-task", Limit: 100})
 	if err != nil {
-		t.Fatalf("list preferences: %v", err)
+		t.Fatalf("list evidence: %v", err)
 	}
 	for _, m := range rows {
 		if d, _ := m.Metadata["topic"].(string); d == domain {
@@ -120,6 +120,51 @@ func findEvidenceMemory(t *testing.T, s *store.SqliteStore, domain string) *stor
 	}
 	t.Fatalf("no evidence memory for domain %q", domain)
 	return nil
+}
+
+// TestEvidenceTaskMigratesLegacyPreferenceRows verifies that existing deployments, which wrote
+// evidence rows into CategoryPreferences before the CategoryEvidence split, get migrated on the
+// next EvidenceTask run. This is what cleans up the polluted preference searches in the field.
+func TestEvidenceTaskMigratesLegacyPreferenceRows(t *testing.T) {
+	s := newEvidenceTestStore(t)
+	task := &EvidenceTask{Store: s}
+
+	// Simulate a legacy evidence row filed under preferences (the pre-split state).
+	legacy := &store.Memory{
+		Content:   "[topic: legacy] accept_rate=0.00 (0 accept / 0 reject / 1 ignore)",
+		Phase:     store.PhaseOrganized,
+		Category:  store.CategoryPreferences, // the wrong category — the pollution
+		Scope:     "global",
+		Tags:      []string{"evidence", "auto-generated"},
+		Source:    "evidence-task",
+		CreatedAt: time.Now(),
+		Metadata:  map[string]any{"topic": "legacy", "source_task": "evidence"},
+	}
+	if err := s.IngestMemory(legacy); err != nil {
+		t.Fatalf("ingest legacy: %v", err)
+	}
+
+	// Before run: legacy row sits in preferences.
+	before, _ := s.List(store.ListOptions{Category: store.CategoryPreferences, Source: "evidence-task", Limit: 100})
+	if len(before) != 1 {
+		t.Fatalf("precondition: expected 1 legacy evidence row in preferences, got %d", len(before))
+	}
+
+	// Run triggers migrateLegacyPreferenceRows.
+	if _, err := task.Run(s); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	// After run: legacy row must have moved out of preferences.
+	after, _ := s.List(store.ListOptions{Category: store.CategoryPreferences, Source: "evidence-task", Limit: 100})
+	if len(after) != 0 {
+		t.Errorf("legacy evidence rows still in preferences after migration: %d (want 0)", len(after))
+	}
+	// And it must now be in evidence (the legacy row + the 2 freshly-written domain rows = 3).
+	inEvidence, _ := s.List(store.ListOptions{Category: store.CategoryEvidence, Source: "evidence-task", Limit: 100})
+	if len(inEvidence) < 1 {
+		t.Errorf("expected migrated rows in evidence, got %d", len(inEvidence))
+	}
 }
 
 func metadataFloat(m *store.Memory, key string) float64 {

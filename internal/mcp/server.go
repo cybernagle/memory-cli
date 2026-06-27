@@ -542,10 +542,13 @@ func runAskWorkflowMCP(s *Server, question string, history []chatMessage) (strin
 		searchQuery = splitCJKKeywordsImpl(question)
 	}
 
-	// Search all phases.
-	inbox, _ := s.store.SearchWithExpansion(store.SearchOptions{Query: searchQuery, Phase: store.PhaseInbox})
-	org, _ := s.store.SearchWithExpansion(store.SearchOptions{Query: searchQuery, Phase: store.PhaseOrganized})
-	proc, _ := s.store.SearchWithExpansion(store.SearchOptions{Query: searchQuery, Phase: store.PhaseProcessed})
+	// Search all phases. Exclude auto-generated aggregates (proposal evidence, profile
+	// snapshots) so they don't crowd out real memories in recency ranking — e.g. a "用户是谁"
+	// query should surface "User prefers Go/React", not "[topic: writing] accept_rate=0.00".
+	excludeAggregates := []string{"evidence-task", "profile-task"}
+	inbox, _ := s.store.SearchWithExpansion(store.SearchOptions{Query: searchQuery, Phase: store.PhaseInbox, ExcludeSources: excludeAggregates})
+	org, _ := s.store.SearchWithExpansion(store.SearchOptions{Query: searchQuery, Phase: store.PhaseOrganized, ExcludeSources: excludeAggregates})
+	proc, _ := s.store.SearchWithExpansion(store.SearchOptions{Query: searchQuery, Phase: store.PhaseProcessed, ExcludeSources: excludeAggregates})
 
 	combined := append(org, proc...)
 	combined = append(combined, inbox...)

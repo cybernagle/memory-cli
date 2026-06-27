@@ -15,6 +15,11 @@ type SearchOptions struct {
 	Category Category
 	From     *time.Time
 	To       *time.Time
+	// ExcludeSources drops any memory whose Source matches one of these values. Used by semantic
+	// search (memory_ask, dashboard chat) to keep auto-generated aggregates — proposal evidence,
+	// profile snapshots — out of entity/preference results. Those are statistical signal for the
+	// brain, not user-facing facts, and they pollute recency-sorted ranking otherwise.
+	ExcludeSources []string
 }
 
 func (s *FileStore) SearchLike(opts SearchOptions) ([]*Memory, error) {

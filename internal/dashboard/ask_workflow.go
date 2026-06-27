@@ -352,17 +352,25 @@ func stageFetchEntity(ctx *askContext) bool {
 	// SearchWithExpansion: initial search + frequent-term expansion + newest-first sort.
 	// This finds memories that don't contain the exact query keywords but are topically
 	// related (e.g. "瑞福莱" search expands to "合同" and finds the 6/22 ¥54,000 record).
+	//
+	// ExcludeSources drops auto-generated aggregates (proposal evidence, profile snapshots) so
+	// they don't crowd out real memories in recency ranking. E.g. without this, querying "用户是
+	// 谁" surfaces "[topic: writing] accept_rate=0.00" instead of "User prefers Go over Python".
+	excludeAggregates := []string{"evidence-task", "profile-task"}
 	orgResults, _ := ctx.srv.store.impl.SearchWithExpansion(store.SearchOptions{
-		Query: searchQuery,
-		Phase: store.PhaseOrganized,
+		Query:          searchQuery,
+		Phase:          store.PhaseOrganized,
+		ExcludeSources: excludeAggregates,
 	})
 	inbox, _ := ctx.srv.store.impl.SearchWithExpansion(store.SearchOptions{
-		Query: searchQuery,
-		Phase: store.PhaseInbox,
+		Query:          searchQuery,
+		Phase:          store.PhaseInbox,
+		ExcludeSources: excludeAggregates,
 	})
 	procResults, _ := ctx.srv.store.impl.SearchWithExpansion(store.SearchOptions{
-		Query: searchQuery,
-		Phase: store.PhaseProcessed,
+		Query:          searchQuery,
+		Phase:          store.PhaseProcessed,
+		ExcludeSources: excludeAggregates,
 	})
 
 	// If everything is empty, try the raw question as a last resort.
