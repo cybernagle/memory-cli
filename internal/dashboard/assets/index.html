@@ -426,11 +426,9 @@ a:hover { text-decoration: underline; }
       </div>
     </div>
     <div class="card">
-      <h2>Processing Backlog · 处理积压</h2>
-      <div style="position:relative;height:200px">
-        <canvas id="backlogChart"></canvas>
-      </div>
-      <div style="font-size:11px;color:var(--text2);margin-top:6px">organized/processed 中尚未被各 task 处理的数量（越低越健康）</div>
+      <h2>Processing Backlog · 消费矩阵</h2>
+      <div id="consumptionMatrix" style="font-size:12px;margin-top:4px"></div>
+      <div style="font-size:11px;color:var(--text2);margin-top:6px">每行=phase，每列=processor；数字=consumed/total (百分比)。100% 表示该层已被该 processor 完全消费。</div>
     </div>
     <div class="card">
       <h2>Models · LLM 来源</h2>
@@ -641,7 +639,6 @@ let categoryChart = null;
 let projectChart = null;
 let sourceChart = null;
 let entityKindChart = null;
-let backlogChart = null;
 let modelChart = null;
 let growthChart = null;
 let hourChart = null;
@@ -784,7 +781,7 @@ async function loadStats() {
   // New dimension charts (data was in the API but never rendered).
   renderSourceChart(stats.sources);
   renderEntityKindChart(stats.entity_kinds);
-  renderBacklogChart(stats.backlog);
+  renderConsumptionMatrix(stats.consumption);
   renderModelChart(stats.models);
   loadGrowthChart();
 }
@@ -881,20 +878,36 @@ function renderEntityKindChart(kinds) {
   });
 }
 
-function renderBacklogChart(backlog) {
-  const entries = Object.entries(backlog || {}).sort((a,b) => b[1]-a[1]);
-  const labels = entries.map(e => e[0]);
-  const data = entries.map(e => e[1]);
-  if (backlogChart) backlogChart.destroy();
-  backlogChart = new Chart(document.getElementById('backlogChart'), {
-    type: 'bar',
-    data: { labels, datasets: [{ data, backgroundColor: '#f97316', borderRadius: 4, barThickness: 18 }] },
-    options: {
-      indexAxis: 'y', responsive: true, maintainAspectRatio: false,
-      plugins: { legend: { display: false } },
-      scales: { x: { beginAtZero: true }, y: { ticks: { font: { size: 11 } } } }
-    }
+function renderConsumptionMatrix(cells) {
+  // cells = [{phase, processor, consumed, total, pct}, ...]. Render as a phase×processor grid
+  // so the whole pipeline is visible: which phases are fully consumed by which processor.
+  if (!cells || !cells.length) { document.getElementById('consumptionMatrix').innerHTML = '<span class="muted">no data</span>'; return; }
+  // Build column set (processors) and row set (phases) in a stable order.
+  var procOrder = ['fact-processor','consolidate-llm','enrich-tags','entity-extract'];
+  var phaseOrder = ['inbox','processed','organized'];
+  var byKey = {};
+  cells.forEach(function(c){ byKey[c.phase+'|'+c.processor] = c; });
+  var html = '<table style="width:100%;border-collapse:collapse;font-size:12px">';
+  // Header row.
+  html += '<tr><th style="text-align:left;padding:4px 6px;border:1px solid var(--border)"></th>';
+  procOrder.forEach(function(p){ html += '<th style="padding:4px 6px;border:1px solid var(--border);text-align:center;font-weight:600">'+p+'</th>'; });
+  html += '</tr>';
+  phaseOrder.forEach(function(ph){
+    html += '<tr><td style="padding:4px 6px;border:1px solid var(--border);font-weight:600">'+ph+'</td>';
+    procOrder.forEach(function(pr){
+      var c = byKey[ph+'|'+pr];
+      if (!c) { html += '<td style="padding:4px 6px;border:1px solid var(--border);text-align:center;color:var(--text2)">—</td>'; return; }
+      var pct = parseFloat(c.pct);
+      // Color: green ≥90, yellow ≥50, red <50 (pipeline health at a glance).
+      var color = pct >= 90 ? '#4ade80' : (pct >= 50 ? '#f59e0b' : '#f87171');
+      html += '<td style="padding:4px 6px;border:1px solid var(--border);text-align:center">'+
+        '<div style="font-weight:600;color:'+color+'">'+c.pct+'%</div>'+
+        '<div style="font-size:10px;color:var(--text2)">'+c.consumed+'/'+c.total+'</div></td>';
+    });
+    html += '</tr>';
   });
+  html += '</table>';
+  document.getElementById('consumptionMatrix').innerHTML = html;
 }
 
 function renderModelChart(models) {

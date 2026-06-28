@@ -1,6 +1,7 @@
 package dashboard
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/cybernagle/memory-cli/internal/store"
@@ -22,9 +23,23 @@ type StatsResponse struct {
 	ExpiringSoon int            `json:"expiring_soon"`
 	// Additional dimensions surfaced on the dashboard (were returned by the DB but not shown).
 	EntityKinds  map[string]int `json:"entity_kinds"`   // entity graph quality: concept/technology/domain/...
-	Models       map[string]int `json:"models"`         // which LLM produced this memory
-	Sessions     map[string]int `json:"sessions"`       // tmux_session provenance (top 25)
-	Backlog      map[string]int `json:"backlog"`        // unconsumed counts per processor phase
+	Models       map[string]int           `json:"models"`         // which LLM produced this memory
+	Sessions     map[string]int           `json:"sessions"`       // tmux_session provenance (top 25)
+	Backlog      map[string]int           `json:"backlog"`        // unconsumed counts per processor phase (legacy, kept for compat)
+	Consumption  []ConsumptionCell        `json:"consumption"`    // phase×processor consumption matrix
+}
+
+// ConsumptionCell is one cell of the phase×processor consumption matrix: of the N memories in
+// `phase`, how many have been consumed by `processor`. The dashboard renders this as a matrix
+// so you can see pipeline health at a glance (e.g. "inbox 100% fact-processed, but processed
+// only 3.5% consolidated"). Because we never delete data (only mark consumed), the consumed
+// rows stay available for other processors — this matrix shows that availability.
+type ConsumptionCell struct {
+	Phase     string `json:"phase"`      // inbox / processed / organized
+	Processor string `json:"processor"`  // fact-processor / consolidate-llm / enrich-tags / entity-extract
+	Consumed  int    `json:"consumed"`   // how many in this phase have this processor's bit set
+	Total     int    `json:"total"`      // total memories in this phase
+	Pct       string `json:"pct"`        // consumed/total as "NN.N%" (pre-formatted for the UI)
 }
 
 // statser is the store capability ComputeStats needs. Both SqliteStore and FileStore
@@ -213,17 +228,56 @@ func computeStatsSQL(s *store.SqliteStore) (*StatsResponse, error) {
 		sessRows.Close()
 	}
 
-	// Backlog: unconsumed counts per processor phase, over organized/processed memories. This is
-	// the processing-pipeline health view — e.g. entity-extract backlog = how many facts still
-	// lack entity extraction.
-	for name, bit := range map[string]int64{
-		"entity-extract": int64(store.ConsumerEntityExtract),
-		"enrich-tags":    int64(store.ConsumerEnrichTags),
-		"consolidate":    int64(store.ConsumerConsolidateLLM),
-	} {
-		var count int
-		db.QueryRow("SELECT COUNT(*) FROM memories WHERE phase IN ('organized','processed') AND (consumed_mask & ?) = 0", bit).Scan(&count)
-		resp.Backlog[name] = count
+	// Backlog + Consumption matrix: for each (phase × processor), how many are consumed vs
+	// total. Backlog is the legacy unconsumed-on-organized/processed view; Consumption is the
+	// full phase×processor matrix that lets you see e.g. "inbox 100% fact-processed".
+	// Build both in one pass — they read the same underlying consumed_mask data.
+	consumers := []struct {
+		name string
+		bit  int64
+	}{
+		{"fact-processor", int64(store.ConsumerFactProcessor)},
+		{"consolidate-llm", int64(store.ConsumerConsolidateLLM)},
+		{"enrich-tags", int64(store.ConsumerEnrichTags)},
+		{"entity-extract", int64(store.ConsumerEntityExtract)},
+	}
+	// A processor only meaningfully consumes certain phases (e.g. fact-processor reads inbox,
+	// consolidate/entity read processed/organized). Define which phase×processor cells to compute.
+	matrix := []struct{ phase, processor string }{
+		{"inbox", "fact-processor"},
+		{"processed", "consolidate-llm"},
+		{"processed", "enrich-tags"},
+		{"processed", "entity-extract"},
+		{"organized", "consolidate-llm"},
+		{"organized", "enrich-tags"},
+		{"organized", "entity-extract"},
+	}
+	bitFor := func(name string) int64 {
+		for _, c := range consumers {
+			if c.name == name {
+				return c.bit
+			}
+		}
+		return 0
+	}
+	for _, cell := range matrix {
+		bit := bitFor(cell.processor)
+		var total, consumed int
+		db.QueryRow("SELECT COUNT(*) FROM memories WHERE phase = ?", cell.phase).Scan(&total)
+		db.QueryRow("SELECT COUNT(*) FROM memories WHERE phase = ? AND (consumed_mask & ?) != 0",
+			cell.phase, bit).Scan(&consumed)
+		pct := "0.0"
+		if total > 0 {
+			pct = fmt.Sprintf("%.1f", float64(consumed)/float64(total)*100)
+		}
+		resp.Consumption = append(resp.Consumption, ConsumptionCell{
+			Phase: cell.phase, Processor: cell.processor,
+			Consumed: consumed, Total: total, Pct: pct,
+		})
+		// Backlog (legacy): unconsumed organized/processed per processor.
+		if (cell.phase == "organized" || cell.phase == "processed") && consumed < total {
+			resp.Backlog[cell.processor] += total - consumed
+		}
 	}
 
 	return resp, nil
