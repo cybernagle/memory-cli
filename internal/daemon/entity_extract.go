@@ -26,10 +26,19 @@ import (
 type EntityExtractionTask struct {
 	LLM   *llm.Client
 	Store *store.SqliteStore
+	// Limit overrides entityExtractPerTick for this run. The one-off `memory entity-build`
+	// command sets this high (e.g. 100000) to drain the whole backlog in a single pass; the
+	// daemon leaves it 0 so the per-tick cap applies.
+	Limit int
 }
 
 const (
-	entityExtractPerTick   = 20 // memories processed per daemon tick
+	// entityExtractPerTick caps how many memories one daemon tick processes. GLM-4.5-Flash is
+	// fast and free, and entities are extracted in batches (one LLM call per batch of
+	// entityExtractBatchSize, not per memory), so this can be much higher than the original 20.
+	// The corpus backlog was ~11k; at 20/tick × 1h interval that's ~24 days. At 100/tick it's
+	// ~5 days, and a one-off `memory entity-build` run clears it in minutes.
+	entityExtractPerTick   = 100 // memories processed per daemon tick
 	entityExtractBatchSize = 5  // memories per LLM call
 )
 
@@ -40,28 +49,22 @@ func (t *EntityExtractionTask) Run(s store.Store) (int, error) {
 		return 0, nil
 	}
 
-	// Find memories not yet processed by entity-extract.
-	// Use the entity store directly via the SqliteStore's DB.
+	// Find memories not yet processed by entity-extract, querying the backlog DIRECTLY.
+	// The old code used List(Limit:500) ordered by created_at DESC — that only ever saw the
+	// newest 500 memories, so ~11k of older backlog was UNREACHABLE no matter how many ticks ran
+	// (the "backlog never shrinks" bug). ListUnconsumedInPhase queries by consumed_mask across
+	// organized/processed, oldest-first, so the oldest backlog drains first.
+	limit := t.Limit
+	if limit == 0 {
+		limit = entityExtractPerTick
+	}
 	entityStore := entity.NewEntityStore(t.Store.DB())
-
-	all, err := s.List(store.ListOptions{Limit: 500})
+	pending, err := t.Store.ListUnconsumedInPhase("entity-extract",
+		[]store.Phase{store.PhaseOrganized, store.PhaseProcessed}, limit)
 	if err != nil {
 		return 0, err
 	}
-
-	// Filter to memories not yet entity-extracted, preferring organized > processed > inbox.
-	var pending []*store.Memory
-	for _, m := range all {
-		if store.IsConsumedByMemory(m, "entity-extract") {
-			continue
-		}
-		if m.Phase == store.PhaseOrganized || m.Phase == store.PhaseProcessed {
-			pending = append(pending, m)
-		}
-		if len(pending) >= entityExtractPerTick {
-			break
-		}
-	}
+	_ = entityStore // used later for Resolve/RecordMention
 
 	if len(pending) == 0 {
 		return 0, nil

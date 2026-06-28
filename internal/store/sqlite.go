@@ -435,6 +435,54 @@ func (s *SqliteStore) MarkConsumed(id string, processorName string) error {
 	return nil
 }
 
+// ListUnconsumedInPhase returns memories in the given phases that have NOT been consumed by the
+// named processor, ordered oldest-first (so backlog drains in chronological order). Unlike
+// ListUnconsumed (which is inbox-only), this reaches organized/processed memories — needed by
+// EntityExtractionTask, whose backlog lives in those phases and was previously unreachable
+// because the task queried List(Limit:500) by created_at DESC (newest-first, never reaching
+// the 11k of older backlog). limit caps the result; pass a large number for a one-off drain.
+func (s *SqliteStore) ListUnconsumedInPhase(processorName string, phases []Phase, limit int) ([]*Memory, error) {
+	c, ok := ConsumerByName(processorName)
+	if !ok {
+		return nil, fmt.Errorf("unknown consumer: %s", processorName)
+	}
+	if limit <= 0 {
+		limit = 100
+	}
+	if len(phases) == 0 {
+		phases = []Phase{PhaseOrganized, PhaseProcessed}
+	}
+	placeholders := make([]string, len(phases))
+	args := []any{int64(c)}
+	for i, p := range phases {
+		placeholders[i] = "?"
+		args = append(args, string(p))
+	}
+	args = append(args, limit)
+	rows, err := s.db.Query(fmt.Sprintf(`
+		SELECT id, content, content_hash, phase, category, scope, source, session_id,
+		       created_at, updated_at, expires_at, access_count, version, processed_by, project, tmux_session, consumed_mask,
+		       message_uuid, parent_uuid, role, git_branch, model, prompt_id, metadata
+		FROM memories
+		WHERE (consumed_mask & ?) = 0 AND phase IN (%s)
+		ORDER BY created_at ASC
+		LIMIT ?`, strings.Join(placeholders, ",")),
+		args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*Memory
+	for rows.Next() {
+		mem, err := scanMemoryRow(rows)
+		if err != nil {
+			continue
+		}
+		out = append(out, mem)
+	}
+	return out, nil
+}
+
 func (s *SqliteStore) ListUnconsumed(processorName string) ([]*Memory, error) {
 	c, ok := ConsumerByName(processorName)
 	if !ok {
