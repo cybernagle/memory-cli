@@ -89,6 +89,17 @@ func parseZcodeRollout(path, sessionID string, isSubagent bool) []*store.Memory 
 	buf := make([]byte, 0, 1024*1024)
 	scanner.Buffer(buf, 8*1024*1024) // rollout lines can be large (full message windows)
 
+	// Track the last user prompt we saw AND already paired with a turn. zcode writes the FULL
+	// sliding message window on every turn, so the same user prompt reappears in every
+	// subsequent turn's window. Without dedup here, a single prompt gets prepended to every
+	// following assistant turn → N duplicate-prefixed memories with distinct hashes (the
+	// content_hash dedup can't catch them because the A differs). This is the root cause of the
+	// "10 duplicate messages" bug: a prompt paired once must NOT be re-paired on later turns.
+	lastSeenUserPrompt := ""
+	// A prompt is considered "new" once; after the first turn that pairs it, subsequent turns
+	// in the same chain (tool calls, follow-up reasoning) must NOT re-prefix it.
+	promptPaired := false
+
 	for scanner.Scan() {
 		var turn zcodeTurn
 		if err := json.Unmarshal(scanner.Bytes(), &turn); err != nil {
@@ -105,14 +116,28 @@ func parseZcodeRollout(path, sessionID string, isSubagent bool) []*store.Memory 
 			continue
 		}
 
-		// Find the user prompt that triggered this turn (last user message in the window).
-		// This pairs the question with the answer for coherent extraction downstream.
+		// Detect whether the window carries a NEW user prompt (i.e. this turn is the start of a
+		// fresh user→assistant exchange). The prompt in the window is "new" only if it differs
+		// from what we already paired. This is what breaks the repeated-prefix chain.
 		userPrompt := lastUserPrompt(turn.Request.Messages)
-		if userPrompt != "" && shouldFilterContent(userPrompt) {
-			userPrompt = "" // noise prompt (greeting/command); keep the answer but drop the prompt
+		if userPrompt != "" && userPrompt != lastSeenUserPrompt {
+			// A genuinely new prompt appeared — reset so it can be paired with this turn.
+			lastSeenUserPrompt = userPrompt
+			promptPaired = false
+		}
+		// Pair the prompt ONLY on the first turn after it appeared; continuation turns (tool
+		// calls, follow-up reasoning) in the same chain must NOT re-prefix it.
+		if promptPaired {
+			userPrompt = ""
+		} else if userPrompt != "" && shouldFilterContent(userPrompt) {
+			userPrompt = "" // noise prompt (greeting/command); keep the answer, drop the prompt
+		}
+		if userPrompt != "" {
+			promptPaired = true
 		}
 
-		// Build the memory content: if we have the user prompt, prefix it for context.
+		// Build the memory content: prefix with the user prompt ONLY on the first turn of a new
+		// exchange. Continuation turns get just the answer (no repeated Q prefix).
 		content := assistantText
 		if userPrompt != "" {
 			content = "Q: " + userPrompt + "\nA: " + assistantText
