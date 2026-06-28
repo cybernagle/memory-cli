@@ -413,6 +413,31 @@ a:hover { text-decoration: underline; }
         <canvas id="categoryChart"></canvas>
       </div>
     </div>
+    <div class="card">
+      <h2>Sources · 来源</h2>
+      <div style="position:relative;height:200px">
+        <canvas id="sourceChart"></canvas>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Entity Kinds · 实体类型</h2>
+      <div style="position:relative;height:200px">
+        <canvas id="entityKindChart"></canvas>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Processing Backlog · 处理积压</h2>
+      <div style="position:relative;height:200px">
+        <canvas id="backlogChart"></canvas>
+      </div>
+      <div style="font-size:11px;color:var(--text2);margin-top:6px">organized/processed 中尚未被各 task 处理的数量（越低越健康）</div>
+    </div>
+    <div class="card">
+      <h2>Models · LLM 来源</h2>
+      <div style="position:relative;height:200px">
+        <canvas id="modelChart"></canvas>
+      </div>
+    </div>
   </div>
 
   <div class="growth-chart-container grid-full">
@@ -594,6 +619,10 @@ a:hover { text-decoration: underline; }
       <span id="graphStats" class="muted" style="font-size:12px"></span>
       <input type="text" id="entitySearch" placeholder="搜索实体（如 makro、go、合同）..." style="background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:3px 8px;font-size:12px;width:180px;margin-left:8px" oninput="searchEntityGraph()" />
       <span class="muted" style="font-size:11px;margin-left:auto">点击=查看记忆 · 双击=展开关联 · 拖拽后位置固定</span>
+      <label style="font-size:11px;color:var(--text2);margin-left:12px;display:flex;align-items:center;gap:4px">最小 mentions:
+        <input type="range" id="entityMinMentions" min="1" max="10" value="2" style="width:90px" oninput="document.getElementById('minMentionsVal').textContent=this.value; loadEntityGraph()" />
+        <span id="minMentionsVal" style="width:14px;text-align:center">2</span>
+      </label>
     </div>
     <div style="flex:1;display:flex;overflow:hidden">
       <div id="entityNetwork" style="flex:1;background:var(--bg)"></div>
@@ -610,6 +639,10 @@ let currentTab = 'overview';
 let allMemories = [];
 let categoryChart = null;
 let projectChart = null;
+let sourceChart = null;
+let entityKindChart = null;
+let backlogChart = null;
+let modelChart = null;
 let growthChart = null;
 let hourChart = null;
 let weekdayChart = null;
@@ -748,6 +781,11 @@ async function loadStats() {
   }).join('') || '<span class="muted">No data</span>';
 
   renderChart(stats.categories);
+  // New dimension charts (data was in the API but never rendered).
+  renderSourceChart(stats.sources);
+  renderEntityKindChart(stats.entity_kinds);
+  renderBacklogChart(stats.backlog);
+  renderModelChart(stats.models);
   loadGrowthChart();
 }
 
@@ -803,6 +841,74 @@ function renderChart(categories) {
         x: { grid: { color: '#2e3348' }, ticks: { color: '#8b8fa8' }, beginAtZero: true },
         y: { grid: { display: false }, ticks: { color: '#e4e6f0', font: { size: 12 } } }
       }
+    }
+  });
+}
+
+// ─── New dimension charts (source / entity-kind / backlog / model) ───
+// These were returned by the stats API but never rendered — the "lost dimensions".
+function renderSourceChart(sources) {
+  const entries = Object.entries(sources || {}).sort((a,b) => b[1]-a[1]);
+  const labels = entries.map(e => e[0]);
+  const data = entries.map(e => e[1]);
+  if (sourceChart) sourceChart.destroy();
+  sourceChart = new Chart(document.getElementById('sourceChart'), {
+    type: 'bar',
+    data: { labels, datasets: [{ data, backgroundColor: '#22d3ee', borderRadius: 4, barThickness: 14 }] },
+    options: {
+      indexAxis: 'y', responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: { x: { beginAtZero: true }, y: { ticks: { font: { size: 11 } } } }
+    }
+  });
+}
+
+function renderEntityKindChart(kinds) {
+  const entries = Object.entries(kinds || {}).sort((a,b) => b[1]-a[1]);
+  const labels = entries.map(e => e[0]);
+  const data = entries.map(e => e[1]);
+  // Distinct colors per kind so the concept-dominance skew is visible at a glance.
+  const kindColors = { concept:'#6c8aff', technology:'#4ade80', domain:'#f59e0b', identifier:'#a78bfa', company:'#ec4899', person:'#22d3ee', project:'#f97316' };
+  const colors = labels.map(k => kindColors[k] || '#8b8fa8');
+  if (entityKindChart) entityKindChart.destroy();
+  entityKindChart = new Chart(document.getElementById('entityKindChart'), {
+    type: 'doughnut',
+    data: { labels, datasets: [{ data, backgroundColor: colors, borderWidth: 2, borderColor: '#1a1d27' }] },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { position: 'right', labels: { color: '#e4e6f0', font: { size: 11 }, boxWidth: 12 } } }
+    }
+  });
+}
+
+function renderBacklogChart(backlog) {
+  const entries = Object.entries(backlog || {}).sort((a,b) => b[1]-a[1]);
+  const labels = entries.map(e => e[0]);
+  const data = entries.map(e => e[1]);
+  if (backlogChart) backlogChart.destroy();
+  backlogChart = new Chart(document.getElementById('backlogChart'), {
+    type: 'bar',
+    data: { labels, datasets: [{ data, backgroundColor: '#f97316', borderRadius: 4, barThickness: 18 }] },
+    options: {
+      indexAxis: 'y', responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: { x: { beginAtZero: true }, y: { ticks: { font: { size: 11 } } } }
+    }
+  });
+}
+
+function renderModelChart(models) {
+  const entries = Object.entries(models || {}).sort((a,b) => b[1]-a[1]);
+  const labels = entries.map(e => e[0]);
+  const data = entries.map(e => e[1]);
+  if (modelChart) modelChart.destroy();
+  modelChart = new Chart(document.getElementById('modelChart'), {
+    type: 'bar',
+    data: { labels, datasets: [{ data, backgroundColor: '#a78bfa', borderRadius: 4, barThickness: 16 }] },
+    options: {
+      indexAxis: 'y', responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: { x: { beginAtZero: true }, y: { ticks: { font: { size: 11 } } } }
     }
   });
 }
@@ -1705,11 +1811,13 @@ function loadEntityGraph(expandId) {
       entityNetwork = new vis.Network(container, { nodes: entityNodes, edges: entityEdges }, {
         // Physics: run briefly to settle, then STOP. No bouncing after drag — user drags
         // a node and it stays where they put it.
+        // Tuned to fix overlap (gravitationalConstant -30 → -80 = stronger repulsion; springLength
+        // 100 → 180 = longer links so dense clusters spread out; added damping to avoid jitter).
         physics: {
           enabled: true,
           solver: 'forceAtlas2Based',
-          forceAtlas2Based: { gravitationalConstant: -30, springLength: 100, springConstant: 0.01 },
-          stabilization: { iterations: 200, fit: true }
+          forceAtlas2Based: { gravitationalConstant: -80, springLength: 180, springConstant: 0.008, damping: 0.4 },
+          stabilization: { iterations: 300, fit: true }
         },
         nodes: { shape: 'dot', font: { color: '#e4e6f0', size: 13, face: 'system-ui' }, borderWidth: 2 },
         edges: { color: { color: '#2e3348', opacity: 0.5 }, smooth: false, scaling: { min: 1, max: 6 } },
@@ -1734,7 +1842,12 @@ function loadEntityGraph(expandId) {
     }
 
     var palette = ['#6c8aff','#4ade80','#f59e0b','#ec4899','#a78bfa','#22d3ee','#f97316','#84cc16'];
+    // High-frequency filter: skip single-mention entities by default. The entity table has
+    // 3000+ rows; drawing all of them is what caused the overlap. Entities mentioned ≥2 times
+    // are the meaningful graph skeleton. The threshold is adjustable via the slider in the UI.
+    var minMentions = parseInt(document.getElementById('entityMinMentions')?.value || '2', 10);
     data.nodes.forEach(function(n) {
+      if (n.mentions < minMentions) return; // below threshold: skip (noise)
       var size = 10 + Math.min(n.mentions * 2, 50);
       if (!entityNodes.get(n.id)) {
         entityNodes.add({
@@ -1748,10 +1861,13 @@ function loadEntityGraph(expandId) {
     });
     data.edges.forEach(function(e) {
       var edgeId = e.from + '-' + e.to;
+      // Only add an edge if BOTH endpoints passed the filter (otherwise dangling edges).
+      if (!entityNodes.get(e.from) || !entityNodes.get(e.to)) return;
       if (!entityEdges.get(edgeId)) {
         entityEdges.add({ id: edgeId, from: e.from, to: e.to, value: e.weight, width: Math.min(e.weight, 6) });
       }
     });
+    document.getElementById('graphStats').textContent = entityNodes.length + ' entities, ' + entityEdges.length + ' edges';
     window._entityGraphLoaded = true;
   }).catch(function(e) { document.getElementById('graphStats').textContent = 'Error: ' + e.message; });
 }

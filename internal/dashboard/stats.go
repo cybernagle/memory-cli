@@ -20,6 +20,11 @@ type StatsResponse struct {
 	Processors   map[string]int `json:"processors"` // consumed_mask breakdown: how many memories each processor has touched
 	Recent24h    int            `json:"recent_24h"`
 	ExpiringSoon int            `json:"expiring_soon"`
+	// Additional dimensions surfaced on the dashboard (were returned by the DB but not shown).
+	EntityKinds  map[string]int `json:"entity_kinds"`   // entity graph quality: concept/technology/domain/...
+	Models       map[string]int `json:"models"`         // which LLM produced this memory
+	Sessions     map[string]int `json:"sessions"`       // tmux_session provenance (top 25)
+	Backlog      map[string]int `json:"backlog"`        // unconsumed counts per processor phase
 }
 
 // statser is the store capability ComputeStats needs. Both SqliteStore and FileStore
@@ -54,6 +59,10 @@ func computeStatsSQL(s *store.SqliteStore) (*StatsResponse, error) {
 		Roles:      make(map[string]int),
 		Phases:     make(map[string]int),
 		Processors: make(map[string]int),
+		EntityKinds:  make(map[string]int),
+		Models:       make(map[string]int),
+		Sessions:     make(map[string]int),
+		Backlog:      make(map[string]int),
 	}
 
 	// Total + phase breakdown in one query.
@@ -165,6 +174,57 @@ func computeStatsSQL(s *store.SqliteStore) (*StatsResponse, error) {
 	now := time.Now().Format(time.RFC3339)
 	tomorrow := time.Now().Add(24 * time.Hour).Format(time.RFC3339)
 	db.QueryRow("SELECT COUNT(*) FROM memories WHERE expires_at IS NOT NULL AND expires_at != '' AND expires_at > ? AND expires_at < ?", now, tomorrow).Scan(&resp.ExpiringSoon)
+
+	// Entity kinds: how the entity graph breaks down by type (concept/technology/domain/...).
+	// Surfaces the "96% concept" classification skew without needing the graph view.
+	kindRows, err := db.Query("SELECT kind, COUNT(*) FROM entities GROUP BY kind ORDER BY COUNT(*) DESC")
+	if err == nil {
+		for kindRows.Next() {
+			var k string
+			var n int
+			kindRows.Scan(&k, &n)
+			resp.EntityKinds[k] = n
+		}
+		kindRows.Close()
+	}
+
+	// Models: which LLM produced these memories (glm-4.5-flash / glm-4.7-flash / ...).
+	modelRows, err := db.Query("SELECT model, COUNT(*) FROM memories WHERE model != '' GROUP BY model ORDER BY COUNT(*) DESC")
+	if err == nil {
+		for modelRows.Next() {
+			var m string
+			var n int
+			modelRows.Scan(&m, &n)
+			resp.Models[m] = n
+		}
+		modelRows.Close()
+	}
+
+	// Sessions: tmux_session provenance (top 25). Shows which conversation context memories
+	// originated from — the "where did this come from" dimension.
+	sessRows, err := db.Query("SELECT tmux_session, COUNT(*) FROM memories WHERE tmux_session != '' GROUP BY tmux_session ORDER BY COUNT(*) DESC LIMIT 25")
+	if err == nil {
+		for sessRows.Next() {
+			var ss string
+			var n int
+			sessRows.Scan(&ss, &n)
+			resp.Sessions[ss] = n
+		}
+		sessRows.Close()
+	}
+
+	// Backlog: unconsumed counts per processor phase, over organized/processed memories. This is
+	// the processing-pipeline health view — e.g. entity-extract backlog = how many facts still
+	// lack entity extraction.
+	for name, bit := range map[string]int64{
+		"entity-extract": int64(store.ConsumerEntityExtract),
+		"enrich-tags":    int64(store.ConsumerEnrichTags),
+		"consolidate":    int64(store.ConsumerConsolidateLLM),
+	} {
+		var count int
+		db.QueryRow("SELECT COUNT(*) FROM memories WHERE phase IN ('organized','processed') AND (consumed_mask & ?) = 0", bit).Scan(&count)
+		resp.Backlog[name] = count
+	}
 
 	return resp, nil
 }
