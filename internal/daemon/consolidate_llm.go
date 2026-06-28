@@ -151,8 +151,14 @@ func (t *ConsolidateLLMTask) consolidateProcessed(s store.Store) (int, error) {
 			}
 
 			for _, id := range sourceIDsToDelete {
-				if err := s.Delete(id); err != nil {
-					log.Printf("[consolidate-llm] delete processed %s: %v", id, err)
+				// DO NOT physically delete (s.Delete). The design rule (consumed_mask) is that a
+				// processor marks a memory consumed, never removes it — because OTHER processors
+				// may still want to consume the same data (e.g. entity-extract hasn't seen it yet).
+				// The earlier "Prevent data loss" commit (f37ad70) established this; these Delete
+				// calls were re-introduced later and violate it. Mark consumed instead so consolidate
+				// won't re-process the same data, but the row survives for other consumers.
+				if err := s.MarkConsumed(id, "consolidate-llm"); err != nil {
+					log.Printf("[consolidate-llm] mark-consumed processed %s: %v", id, err)
 				} else {
 					totalDeleted++
 				}
@@ -160,7 +166,7 @@ func (t *ConsolidateLLMTask) consolidateProcessed(s store.Store) (int, error) {
 		}
 	}
 
-	log.Printf("[consolidate-llm] Phase A: merged %d organized, deleted %d processed", totalMerged, totalDeleted)
+	log.Printf("[consolidate-llm] Phase A: merged %d organized, marked %d processed consumed", totalMerged, totalDeleted)
 	return totalMerged, nil
 }
 
@@ -233,7 +239,8 @@ func (t *ConsolidateLLMTask) reconsolidateOrganized(s store.Store) (int, error) 
 			for _, m := range memories {
 				key := contentFingerprint(m.Content)
 				if seen[key] {
-					s.Delete(m.ID)
+					// Mark consumed (do NOT delete) — see Phase A note on the data-retention rule.
+					s.MarkConsumed(m.ID, "consolidate-llm")
 				}
 				seen[key] = true
 			}
@@ -304,12 +311,14 @@ func (t *ConsolidateLLMTask) reconsolidateOrganized(s store.Store) (int, error) 
 		}
 
 		for _, id := range sourceIDsToDelete {
-			if err := s.Delete(id); err != nil {
-				log.Printf("[consolidate-llm] Phase B delete %s: %v", id, err)
+			// Mark consumed (do NOT delete) — preserves the row for other processors. See the
+			// Phase A note on the consumed_mask data-retention rule.
+			if err := s.MarkConsumed(id, "consolidate-llm"); err != nil {
+				log.Printf("[consolidate-llm] Phase B mark-consumed %s: %v", id, err)
 			}
 		}
 
-		log.Printf("[consolidate-llm] Phase B: '%s' %d → %d (deleted %d)", cat, len(memories), len(merged), len(sourceIDsToDelete))
+		log.Printf("[consolidate-llm] Phase B: '%s' %d → %d (marked %d consumed)", cat, len(memories), len(merged), len(sourceIDsToDelete))
 	}
 
 	return totalMerged, nil
