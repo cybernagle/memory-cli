@@ -49,6 +49,50 @@ func (s *EntityStore) CreateEntity(ctx context.Context, name, kind string) (*Ent
 	return e, nil
 }
 
+// UpdateKind sets the kind of an existing entity. Used by the one-off reclassification flow
+// (issue #1) to fix the heuristic mislabeling (96% concept): after LLM re-judgment, this
+// force-overwrites the kind regardless of how the entity was originally classified. Note that
+// Resolve() skips already-existing entities (doesn't re-classify on re-extract), so without
+// this explicit UPDATE the mislabeling is permanent.
+func (s *EntityStore) UpdateKind(ctx context.Context, id, kind string) error {
+	_, err := s.db.ExecContext(ctx,
+		"UPDATE entities SET kind = ?, updated_at = ? WHERE id = ?",
+		kind, time.Now().Format(time.RFC3339), id)
+	if err != nil {
+		return fmt.Errorf("update entity kind: %w", err)
+	}
+	return nil
+}
+
+// AllEntities returns every entity row, optionally filtered by kind. Used by the batch
+// reclassification command to load the full corpus for LLM re-judgment. Ordered by name so the
+// output is deterministic for idempotent re-runs.
+func (s *EntityStore) AllEntities(ctx context.Context, kindFilter string) ([]*Entity, error) {
+	q := "SELECT id, name, kind, aliases, created_at, updated_at, access_count, metadata FROM entities"
+	var args []any
+	if kindFilter != "" {
+		q += " WHERE kind = ?"
+		args = append(args, kindFilter)
+	}
+	q += " ORDER BY name ASC"
+	rows, err := s.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list entities: %w", err)
+	}
+	defer rows.Close()
+	var out []*Entity
+	for rows.Next() {
+		var e Entity
+		var aliasesJSON string
+		if err := rows.Scan(&e.ID, &e.Name, &e.Kind, &aliasesJSON, &e.CreatedAt, &e.UpdatedAt, &e.AccessCount, &e.Metadata); err != nil {
+			continue
+		}
+		json.Unmarshal([]byte(aliasesJSON), &e.Aliases)
+		out = append(out, &e)
+	}
+	return out, nil
+}
+
 func (s *EntityStore) FindByName(ctx context.Context, name string) (*Entity, error) {
 	row := s.db.QueryRowContext(ctx,
 		"SELECT id, name, kind, aliases, created_at, updated_at, access_count, metadata FROM entities WHERE name = ?",
