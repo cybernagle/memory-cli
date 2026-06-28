@@ -101,6 +101,13 @@ var serveCmd = &cobra.Command{
 		}
 		d.AddTask(reminderTask)
 
+		// IngestTask: periodically pull fresh zcode sessions into the inbox. Claude is excluded
+		// (it has its own hook that writes directly). Without this, ingest was manual-only and
+		// zcode data stalled. Idempotent — re-ingest dedups on content_hash.
+		if sqliteStore, ok := s.(*store.SqliteStore); ok {
+			d.AddTask(&daemon.IngestTask{Store: sqliteStore, Sources: []string{"zcode"}})
+		}
+
 		// Wire LLM processor if an API key is available (MEMORY_LLM_API_KEY / legacy ANTHROPIC_*).
 		// A single GLM-4.5-Flash client serves extraction, consolidation, and enrichment.
 		if llmClient, err := llm.NewClient(llm.Config{}); err == nil {
