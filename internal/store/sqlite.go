@@ -294,7 +294,7 @@ func (s *SqliteStore) Delete(id string) error {
 }
 
 func (s *SqliteStore) List(opts ListOptions) ([]*Memory, error) {
-	query := "SELECT id, content, content_hash, phase, category, scope, source, session_id, created_at, updated_at, expires_at, access_count, version, processed_by, project, tmux_session, consumed_mask, message_uuid, parent_uuid, role, git_branch, model, prompt_id, metadata FROM memories WHERE 1=1"
+	query := "SELECT id, content, content_hash, phase, category, scope, source, session_id, created_at, updated_at, expires_at, access_count, version, processed_by, project, tmux_session, consumed_mask, message_uuid, parent_uuid, role, git_branch, model, prompt_id, raw_entry_id, metadata FROM memories WHERE 1=1"
 	var args []any
 
 	if opts.Category != "" {
@@ -521,7 +521,7 @@ func (s *SqliteStore) ListUnconsumedInPhase(processorName string, phases []Phase
 	rows, err := s.db.Query(fmt.Sprintf(`
 		SELECT id, content, content_hash, phase, category, scope, source, session_id,
 		       created_at, updated_at, expires_at, access_count, version, processed_by, project, tmux_session, consumed_mask,
-		       message_uuid, parent_uuid, role, git_branch, model, prompt_id, metadata
+		       message_uuid, parent_uuid, role, git_branch, model, prompt_id, raw_entry_id, metadata
 		FROM memories
 		WHERE (consumed_mask & ?) = 0 AND phase IN (%s)
 		ORDER BY created_at ASC
@@ -555,7 +555,7 @@ func (s *SqliteStore) ListUnconsumed(processorName string) ([]*Memory, error) {
 	rows, err := s.db.Query(`
 		SELECT id, content, content_hash, phase, category, scope, source, session_id,
 		       created_at, updated_at, expires_at, access_count, version, processed_by, project, tmux_session, consumed_mask,
-		       message_uuid, parent_uuid, role, git_branch, model, prompt_id, metadata
+		       message_uuid, parent_uuid, role, git_branch, model, prompt_id, raw_entry_id, metadata
 		FROM memories
 		WHERE phase = 'inbox' AND (consumed_mask & ?) = 0
 		ORDER BY created_at ASC`,
@@ -639,7 +639,7 @@ func (s *SqliteStore) resolveID(id string) (string, error) {
 
 func (s *SqliteStore) FindByID(id string) (*Memory, error) {
 	row := s.db.QueryRow(
-		"SELECT id, content, content_hash, phase, category, scope, source, session_id, created_at, updated_at, expires_at, access_count, version, processed_by, project, tmux_session, consumed_mask, message_uuid, parent_uuid, role, git_branch, model, prompt_id, metadata FROM memories WHERE id = ?",
+		"SELECT id, content, content_hash, phase, category, scope, source, session_id, created_at, updated_at, expires_at, access_count, version, processed_by, project, tmux_session, consumed_mask, message_uuid, parent_uuid, role, git_branch, model, prompt_id, raw_entry_id, metadata FROM memories WHERE id = ?",
 		id)
 	mem, err := scanMemoryRowSingle(row)
 	if err != nil {
@@ -663,7 +663,7 @@ func (s *SqliteStore) FindByID(id string) (*Memory, error) {
 
 func (s *SqliteStore) FindByHash(hash string) (*Memory, error) {
 	row := s.db.QueryRow(
-		"SELECT id, content, content_hash, phase, category, scope, source, session_id, created_at, updated_at, expires_at, access_count, version, processed_by, project, tmux_session, consumed_mask, message_uuid, parent_uuid, role, git_branch, model, prompt_id, metadata FROM memories WHERE content_hash = ?",
+		"SELECT id, content, content_hash, phase, category, scope, source, session_id, created_at, updated_at, expires_at, access_count, version, processed_by, project, tmux_session, consumed_mask, message_uuid, parent_uuid, role, git_branch, model, prompt_id, raw_entry_id, metadata FROM memories WHERE content_hash = ?",
 		hash)
 	mem, err := scanMemoryRowSingle(row)
 	if err != nil {
@@ -756,7 +756,7 @@ func (s *SqliteStore) searchFTS(opts SearchOptions, bm25 bool) ([]*Memory, error
 	query := `
 		SELECT m.id, m.content, m.content_hash, m.phase, m.category, m.scope, m.source,
 		       m.session_id, m.created_at, m.updated_at, m.expires_at, m.access_count, m.version, m.processed_by, m.project, m.tmux_session, m.consumed_mask,
-		       m.message_uuid, m.parent_uuid, m.role, m.git_branch, m.model, m.prompt_id, m.metadata
+		       m.message_uuid, m.parent_uuid, m.role, m.git_branch, m.model, m.prompt_id, m.raw_entry_id, m.metadata
 		FROM memories m
 		WHERE m.id IN (
 			SELECT memory_id FROM memories_fts WHERE memories_fts MATCH ?
@@ -996,7 +996,7 @@ func (s *SqliteStore) SearchLike(opts SearchOptions) ([]*Memory, error) {
 	query := `
 		SELECT m.id, m.content, m.content_hash, m.phase, m.category, m.scope, m.source,
 		       m.session_id, m.created_at, m.updated_at, m.expires_at, m.access_count, m.version, m.processed_by, m.project, m.tmux_session, m.consumed_mask,
-		       m.message_uuid, m.parent_uuid, m.role, m.git_branch, m.model, m.prompt_id, m.metadata
+		       m.message_uuid, m.parent_uuid, m.role, m.git_branch, m.model, m.prompt_id, m.raw_entry_id, m.metadata
 		FROM memories m
 		WHERE m.id IN (` + subq.String() + `) AND m.phase != ''
 	`
@@ -1185,7 +1185,7 @@ func (s *SqliteStore) GetBacklinks(id string) ([]*Memory, error) {
 	rows, err := s.db.Query(`
 		SELECT m.id, m.content, m.content_hash, m.phase, m.category, m.scope, m.source,
 		       m.session_id, m.created_at, m.updated_at, m.expires_at, m.access_count, m.version, m.processed_by, m.project, m.tmux_session, m.consumed_mask,
-		       m.message_uuid, m.parent_uuid, m.role, m.git_branch, m.model, m.prompt_id, m.metadata
+		       m.message_uuid, m.parent_uuid, m.role, m.git_branch, m.model, m.prompt_id, m.raw_entry_id, m.metadata
 		FROM links l
 		JOIN memories m ON m.id = l.source_id
 		WHERE l.target_id = ?`, id)
@@ -1418,6 +1418,7 @@ func (s *SqliteStore) InsertMemory(mem *Memory) error {
 		// Adopt the existing ID so the caller's mem reflects the row we touched, and re-enrich
 		// tags (new ingest may carry new provenance tags like "subagent" the old row lacks).
 		mem.ID = existingID
+		mem.RawEntryID = rawHash
 		tagsToInsert := mergeTags(mem.Tags, ExtractKeywords(mem.Content))
 		for _, tag := range tagsToInsert {
 			if _, err = tx.Exec("INSERT OR IGNORE INTO tags (memory_id, tag) VALUES (?, ?)", mem.ID, tag); err != nil {
@@ -1440,6 +1441,7 @@ func (s *SqliteStore) InsertMemory(mem *Memory) error {
 		tx.Rollback()
 		return err
 	}
+	mem.RawEntryID = rawHash
 
 	// Auto-enrich tags with high-precision keywords extracted from content (free, no LLM).
 	// Done at the single insert chokepoint so every memory — regardless of entry path — gets
@@ -1581,14 +1583,18 @@ func scanMemoryRow(rows *sql.Rows) (*Memory, error) {
 	var processedBy string
 	var metadataStr string
 	var tmuxSession sql.NullString
+	var rawEntryID sql.NullString
 	err := rows.Scan(&mem.ID, &mem.Content, &mem.ContentHash, &phase, &category,
 		&scope, &source, &sessionID, &createdAt, &updatedAt, &expiresAt, &mem.AccessCount, &mem.Version, &processedBy, &project, &tmuxSession, &mem.ConsumedMask,
-		&mem.MessageUUID, &mem.ParentUUID, &mem.Role, &mem.GitBranch, &mem.Model, &mem.PromptID, &metadataStr)
+		&mem.MessageUUID, &mem.ParentUUID, &mem.Role, &mem.GitBranch, &mem.Model, &mem.PromptID, &rawEntryID, &metadataStr)
 	if err != nil {
 		return nil, err
 	}
 	if tmuxSession.Valid {
 		mem.TmuxSession = tmuxSession.String
+	}
+	if rawEntryID.Valid {
+		mem.RawEntryID = rawEntryID.String
 	}
 	mem.Phase = Phase(phase)
 	mem.Category = Category(category)
@@ -1622,14 +1628,18 @@ func scanMemoryRowSingle(row *sql.Row) (*Memory, error) {
 	var processedBy string
 	var metadataStr string
 	var tmuxSession sql.NullString
+	var rawEntryID sql.NullString
 	err := row.Scan(&mem.ID, &mem.Content, &mem.ContentHash, &phase, &category,
 		&scope, &source, &sessionID, &createdAt, &updatedAt, &expiresAt, &mem.AccessCount, &mem.Version, &processedBy, &project, &tmuxSession, &mem.ConsumedMask,
-		&mem.MessageUUID, &mem.ParentUUID, &mem.Role, &mem.GitBranch, &mem.Model, &mem.PromptID, &metadataStr)
+		&mem.MessageUUID, &mem.ParentUUID, &mem.Role, &mem.GitBranch, &mem.Model, &mem.PromptID, &rawEntryID, &metadataStr)
 	if err != nil {
 		return nil, err
 	}
 	if tmuxSession.Valid {
 		mem.TmuxSession = tmuxSession.String
+	}
+	if rawEntryID.Valid {
+		mem.RawEntryID = rawEntryID.String
 	}
 	mem.Phase = Phase(phase)
 	mem.Category = Category(category)

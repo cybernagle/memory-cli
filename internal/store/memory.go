@@ -82,6 +82,11 @@ type Memory struct {
 	Model       string `yaml:"model,omitempty" json:"model,omitempty"`               // model that produced an assistant turn
 	PromptID    string `yaml:"prompt_id,omitempty" json:"prompt_id,omitempty"`       // groups all messages in one user prompt turn
 
+	// RawEntryID links this memory to its source event in the append-only raw_entries
+	// log — the traceability chain from any derived view back to the event (single
+	// source of truth).
+	RawEntryID string `yaml:"raw_entry_id,omitempty" json:"raw_entry_id,omitempty"`
+
 	// Metadata is a free-form JSON store for extensible per-memory data: proposal status,
 	// profile evidence, accept/reject history. Persisted only by SqliteStore (FileStore ignores it).
 	Metadata map[string]any `yaml:"-" json:"metadata,omitempty"`

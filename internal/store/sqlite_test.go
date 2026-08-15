@@ -1095,3 +1095,42 @@ func TestRebuildFromEvents(t *testing.T) {
 		t.Errorf("events after rebuild = %d, want 2 (log must be untouched)", len(after))
 	}
 }
+
+// TestRawEntryIDTraceability: every read path surfaces raw_entry_id, closing the
+// traceability chain from a derived memory back to its source event.
+func TestRawEntryIDTraceability(t *testing.T) {
+	s := tempSqliteStore(t)
+
+	mem, err := s.WriteToInbox("追溯链验证内容", CategoryInbox, "global", nil, "test", "proj-t", "")
+	if err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if mem.RawEntryID == "" {
+		t.Fatal("returned memory lacks RawEntryID (caller-side chain broken)")
+	}
+
+	// Read paths surface it too.
+	got, err := s.FindByID(mem.ID)
+	if err != nil {
+		t.Fatalf("FindByID: %v", err)
+	}
+	if got.RawEntryID != mem.RawEntryID {
+		t.Errorf("FindByID RawEntryID = %q, want %q", got.RawEntryID, mem.RawEntryID)
+	}
+	results, _ := s.Search(SearchOptions{Query: "追溯链验证"})
+	if len(results) != 1 || results[0].RawEntryID != mem.RawEntryID {
+		t.Errorf("Search RawEntryID mismatch: %+v", results)
+	}
+
+	// The event it points to actually exists in the log.
+	entries, _ := s.ListRawEntries()
+	found := false
+	for _, e := range entries {
+		if e.ID == mem.RawEntryID && e.Content == "追溯链验证内容" && e.Project == "proj-t" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("RawEntryID does not resolve to an event in the log")
+	}
+}
