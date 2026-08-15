@@ -1004,3 +1004,14 @@ func (srv *Server) handleEntityMemories(w http.ResponseWriter, r *http.Request) 
 		"count": len(filtered), "total_mentions": len(memIDs),
 	})
 }
+
+// handleEventStats serves metrics over the append-only event log (raw_entries) — the
+// source-of-truth counterpart to /api/stats (which describes derived data).
+func (srv *Server) handleEventStats(w http.ResponseWriter, r *http.Request) {
+	stats, err := ComputeEventStats(srv.store.impl)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, stats)
+}

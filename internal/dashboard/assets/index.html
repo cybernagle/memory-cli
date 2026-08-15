@@ -395,6 +395,40 @@ a:hover { text-decoration: underline; }
       </div>
     </div>
     <div class="card">
+      <h2>Event Log · 事件源 <span style="font-size:11px;font-weight:normal;color:var(--text2)">(source of truth)</span></h2>
+      <div class="stats-row">
+        <div class="stat-box stat-total">
+          <div class="num" id="evTotal">-</div>
+          <div class="label">Events 事件</div>
+        </div>
+        <div class="stat-box stat-inbox">
+          <div class="num" id="evDedup">-</div>
+          <div class="label">Dedup 合并</div>
+        </div>
+        <div class="stat-box stat-recent">
+          <div class="num" id="ev24h">-</div>
+          <div class="label">24h 新增</div>
+        </div>
+        <div class="stat-box stat-organized">
+          <div class="num" id="evDerived">-</div>
+          <div class="label">派生 Memories</div>
+        </div>
+      </div>
+      <div style="margin-top:10px;font-size:11px;color:var(--text2)" id="evRange"></div>
+      <div style="margin-top:12px;display:flex;align-items:flex-end;gap:2px;height:48px" id="evSpark"></div>
+      <div style="margin-top:12px">
+        <h2 style="font-size:12px">事件来源</h2>
+        <div style="font-size:12px" id="evSources"></div>
+      </div>
+      <div style="margin-top:12px">
+        <h2 style="font-size:12px">Provenance 覆盖率</h2>
+        <div style="font-size:12px" id="evProvenance"></div>
+      </div>
+      <div style="margin-top:10px;font-size:11px;color:var(--text2)">
+        事件不可变、永不删除;所有派生视图可由 <code>memory rebuild</code> 从此日志重建。
+      </div>
+    </div>
+    <div class="card">
       <h2>Projects</h2>
       <div style="position:relative;height:220px">
         <canvas id="projectChart"></canvas>
@@ -1806,7 +1840,54 @@ document.getElementById('contextClear').addEventListener('click', function() {
 });
 
 // Init
+// ─── Event Log metrics (source of truth) ───
+async function loadEventStats() {
+  var ev;
+  try { ev = await fetchJSON('/api/event-stats'); } catch(e) { return; }
+  if (!ev.total) return; // FileStore has no event log
+  document.getElementById('evTotal').textContent = ev.total.toLocaleString();
+  document.getElementById('evDedup').textContent = ev.dedup_absorbed.toLocaleString();
+  document.getElementById('ev24h').textContent = ev.recent_24h.toLocaleString();
+  document.getElementById('evDerived').textContent = ev.memories.toLocaleString();
+  document.getElementById('evRange').textContent =
+    (ev.first_event || '') + ' → ' + (ev.last_event || '');
+
+  // 30-day sparkline.
+  var spark = document.getElementById('evSpark');
+  var days = ev.by_day || [];
+  var max = 1;
+  days.forEach(function(d) { if (d.count > max) max = d.count; });
+  spark.innerHTML = days.map(function(d) {
+    var h = Math.max(2, Math.round(d.count / max * 44));
+    return '<div title="' + d.day + ': ' + d.count + ' events" style="flex:1;height:' + h +
+      'px;background:var(--accent,#6c8aff);border-radius:2px;opacity:.75"></div>';
+  }).join('');
+
+  // Top sources with proportional bars.
+  var srcTotal = 0;
+  Object.values(ev.by_source).forEach(function(n) { srcTotal += n; });
+  document.getElementById('evSources').innerHTML = Object.entries(ev.by_source).slice(0, 8).map(function(e) {
+    var pct = (e[1] / srcTotal * 100).toFixed(1);
+    return '<div style="display:flex;align-items:center;gap:8px;margin:2px 0">' +
+      '<span style="width:110px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(e[0]) + '</span>' +
+      '<div style="flex:1;height:8px;background:rgba(128,128,128,.2);border-radius:4px">' +
+      '<div style="width:' + pct + '%;height:100%;background:var(--accent,#6c8aff);border-radius:4px"></div></div>' +
+      '<span style="width:90px;text-align:right;color:var(--text2)">' + e[1].toLocaleString() + ' · ' + pct + '%</span></div>';
+  }).join('');
+
+  // Provenance coverage.
+  document.getElementById('evProvenance').innerHTML = Object.entries(ev.provenance).map(function(e) {
+    var pct = (e[1] / ev.total * 100).toFixed(1);
+    return '<div style="display:flex;align-items:center;gap:8px;margin:2px 0">' +
+      '<span style="width:60px">' + esc(e[0]) + '</span>' +
+      '<div style="flex:1;height:8px;background:rgba(128,128,128,.2);border-radius:4px">' +
+      '<div style="width:' + pct + '%;height:100%;background:#3ecf8e;border-radius:4px"></div></div>' +
+      '<span style="width:90px;text-align:right;color:var(--text2)">' + pct + '%</span></div>';
+  }).join('');
+}
+
 loadStats().catch(showErrorState);
+loadEventStats().catch(showErrorState);
 loadMemories().catch(showErrorState);
 
 // ─── Entity Graph (vis-network) ───

@@ -341,3 +341,85 @@ func computeStatsIter(s statser) (*StatsResponse, error) {
 
 	return resp, nil
 }
+
+// EventStatsResponse: metrics over raw_entries — the append-only event log that is the
+// source of truth every derived view (memories/tags/links/FTS) is rebuilt from. Whereas
+// StatsResponse describes derived data, this describes the log itself: growth, source
+// mix, provenance coverage, and the dedup ratio (how many ingests collapsed onto an
+// existing event instead of appending a new one).
+type EventStatsResponse struct {
+	Total       int            `json:"total"`        // events in the log
+	Memories    int            `json:"memories"`     // derived memories (unique contents)
+	DedupAbsorbed int          `json:"dedup_absorbed"` // Total - Memories: ingests absorbed by content-hash dedup
+	Recent24h   int            `json:"recent_24h"`   // events appended in the last 24h
+	FirstEvent  string         `json:"first_event"`  // earliest ingested_at ("YYYY-MM-DD HH:MM:SS", UTC)
+	LastEvent   string         `json:"last_event"`
+	BySource    map[string]int `json:"by_source"`
+	ByDay       []DayCount     `json:"by_day"`       // last 30 days, ascending
+	Provenance  map[string]int `json:"provenance"`   // per-field: how many events carry it
+}
+
+// DayCount is one day of event ingest volume.
+type DayCount struct {
+	Day   string `json:"day"` // "YYYY-MM-DD"
+	Count int    `json:"count"`
+}
+
+// ComputeEventStats aggregates the event log via SQL. FileStore has no event log, so it
+// returns an empty response (the dashboard hides the section when total==0).
+func ComputeEventStats(s statser) (*EventStatsResponse, error) {
+	resp := &EventStatsResponse{
+		BySource:   map[string]int{},
+		ByDay:      []DayCount{},
+		Provenance: map[string]int{},
+	}
+	sqlStore, ok := s.(*store.SqliteStore)
+	if !ok {
+		return resp, nil // FileStore: no raw_entries
+	}
+	db := sqlStore.DB()
+
+	db.QueryRow("SELECT COUNT(*), MIN(ingested_at), MAX(ingested_at) FROM raw_entries").
+		Scan(&resp.Total, &resp.FirstEvent, &resp.LastEvent)
+	db.QueryRow("SELECT COUNT(*) FROM memories").Scan(&resp.Memories)
+	if resp.Total > resp.Memories {
+		resp.DedupAbsorbed = resp.Total - resp.Memories
+	}
+	db.QueryRow("SELECT COUNT(*) FROM raw_entries WHERE ingested_at >= datetime('now', '-1 day')").Scan(&resp.Recent24h)
+
+	if rows, err := db.Query("SELECT source, COUNT(*) FROM raw_entries GROUP BY source ORDER BY COUNT(*) DESC LIMIT 12"); err == nil {
+		for rows.Next() {
+			var src string
+			var n int
+			if rows.Scan(&src, &n) == nil {
+				resp.BySource[src] = n
+			}
+		}
+		rows.Close()
+	}
+
+	if rows, err := db.Query(`SELECT date(ingested_at) d, COUNT(*) FROM raw_entries
+		WHERE ingested_at >= datetime('now', '-30 days')
+		GROUP BY d ORDER BY d`); err == nil {
+		for rows.Next() {
+			var d string
+			var n int
+			if rows.Scan(&d, &n) == nil {
+				resp.ByDay = append(resp.ByDay, DayCount{Day: d, Count: n})
+			}
+		}
+		rows.Close()
+	}
+
+	// Provenance coverage: the fat-event upgrade is complete when every event carries
+	// these; legacy events show as gaps that can never be backfilled (source never had it).
+	for field, col := range map[string]string{
+		"project": "project", "session": "session_id", "tmux": "tmux_session",
+		"branch": "git_branch", "prompt": "prompt_id", "message": "message_uuid",
+	} {
+		var n int
+		db.QueryRow("SELECT COUNT(*) FROM raw_entries WHERE "+col+" != ''").Scan(&n)
+		resp.Provenance[field] = n
+	}
+	return resp, nil
+}
