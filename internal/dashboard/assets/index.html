@@ -1016,7 +1016,12 @@ async function showDetail(id) {
   }).join('');
   document.getElementById('detailInfo').innerHTML =
     '<span>Source: ' + esc(m.source || 'unknown') + '</span>' +
-    '<span>Links: ' + (m.links || []).length + '</span>';
+    '<span>Links: ' + (m.links || []).length + '</span>' +
+    '<span>Event 溯源: <code title="raw_entries 事件ID,可用 memory events --id 查看">' + esc((m.raw_entry_id || '').slice(0, 12) || 'n/a') + '</code></span>' +
+    (m.project ? '<span>Project: ' + esc(m.project) + '</span>' : '') +
+    (m.tmux_session ? '<span>tmux: ' + esc(m.tmux_session) + '</span>' : '') +
+    (m.git_branch ? '<span>Branch: ' + esc(m.git_branch) + '</span>' : '') +
+    (m.prompt_id ? '<span>Prompt: ' + esc(m.prompt_id) + '</span>' : '');
 
   try {
     var links = await fetchJSON('/api/memories/' + encodeURIComponent(id) + '/links');
