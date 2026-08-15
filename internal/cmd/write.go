@@ -38,10 +38,12 @@ var writeCmd = &cobra.Command{
 			if err := validateCategory(cat); err != nil {
 				return err
 			}
+			// The real category column is now set below; the cat: tag is kept for
+			// backward compat with downstream processors that match on it.
 			tags = append(tags, "cat:"+writeCategory)
 		}
 
-		mem, err := s.WriteToInbox(content, writeScope, tags, writeSource, ingest.CurrentProject(), ingest.CurrentTmuxSession())
+		mem, err := s.WriteToInbox(content, store.Category(writeCategory), writeScope, tags, writeSource, ingest.CurrentProject(), ingest.CurrentTmuxSession())
 		if err != nil {
 			return err
 		}

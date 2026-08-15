@@ -131,7 +131,8 @@ func LLMExtractKeywords(ctx context.Context, c *llm.Client, question string) (st
 Rules:
 - Output the KEYWORDS ONLY, space-separated, no explanation
 - Keep proper nouns intact (juli, RSA, GLM, makro)
-- For Chinese, output individual meaningful words (企业, 客户, 部署), not whole phrases
+- For Chinese, output individual meaningful words (企业注册, 客户名单, 部署流程), not whole phrases
+- Chinese keywords MUST be at least 3 characters; prefer full entity names (瑞福莱暖通, not 暖通)
 - Remove question words (什么, 怎么, 吗, 呢, 的, 是, 还记得, 有没有)
 - Mix English and Chinese as appropriate to the question
 

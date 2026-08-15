@@ -1,10 +1,13 @@
 package store
 
 import (
+	"database/sql"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	_ "modernc.org/sqlite"
 )
 
 func tempSqliteStore(t *testing.T) *SqliteStore {
@@ -44,7 +47,7 @@ func TestSqliteWriteAndRead(t *testing.T) {
 func TestSqliteWriteToInbox(t *testing.T) {
 	s := tempSqliteStore(t)
 
-	mem, err := s.WriteToInbox("inbox item", "global", []string{"tag1"}, "test", "", "")
+	mem, err := s.WriteToInbox("inbox item", CategoryInbox, "global", []string{"tag1"}, "test", "", "")
 	if err != nil {
 		t.Fatalf("write to inbox: %v", err)
 	}
@@ -381,7 +384,7 @@ func TestSqliteTag(t *testing.T) {
 func TestSqliteUpgrade(t *testing.T) {
 	s := tempSqliteStore(t)
 
-	mem, _ := s.WriteToInbox("upgrade me", "global", nil, "test", "", "")
+	mem, _ := s.WriteToInbox("upgrade me", CategoryInbox, "global", nil, "test", "", "")
 	if mem.Phase != PhaseInbox {
 		t.Fatal("expected inbox phase")
 	}
@@ -446,7 +449,7 @@ func TestSqliteLinks(t *testing.T) {
 func TestSqliteExpiry(t *testing.T) {
 	s := tempSqliteStore(t)
 
-	mem, _ := s.WriteToInbox("expiring soon", "global", nil, "test", "", "")
+	mem, _ := s.WriteToInbox("expiring soon", CategoryInbox, "global", nil, "test", "", "")
 	mem.ExpiresAt = timePtr(time.Now().Add(-1 * time.Hour))
 	s.db.Exec("UPDATE memories SET expires_at = ? WHERE id = ?",
 		mem.ExpiresAt.Format(time.RFC3339), mem.ID)
@@ -499,7 +502,7 @@ func TestInsertMemoryRecordsRawEntry(t *testing.T) {
 		t.Fatalf("raw_entries not empty at start: %d", before)
 	}
 
-	mem, err := s.WriteToInbox("a fragment to remember", "global", []string{"x"}, "claude", "", "")
+	mem, err := s.WriteToInbox("a fragment to remember", CategoryInbox, "global", []string{"x"}, "claude", "", "")
 	if err != nil {
 		t.Fatalf("write: %v", err)
 	}
@@ -527,10 +530,10 @@ func TestRawEntryDedup(t *testing.T) {
 	s := tempSqliteStore(t)
 
 	// Same content written via two different paths must produce one raw entry.
-	if _, err := s.WriteToInbox("duplicate content", "global", nil, "claude", "", ""); err != nil {
+	if _, err := s.WriteToInbox("duplicate content", CategoryInbox, "global", nil, "claude", "", ""); err != nil {
 		t.Fatalf("write 1: %v", err)
 	}
-	if _, err := s.WriteToInbox("duplicate content", "global", nil, "manual", "", ""); err != nil {
+	if _, err := s.WriteToInbox("duplicate content", CategoryInbox, "global", nil, "manual", "", ""); err != nil {
 		t.Fatalf("write 2: %v", err)
 	}
 
@@ -546,7 +549,7 @@ func TestRawEntryDedup(t *testing.T) {
 func TestDeletePreservesRawEntry(t *testing.T) {
 	s := tempSqliteStore(t)
 
-	mem, err := s.WriteToInbox("must survive deletion", "global", nil, "claude", "", "")
+	mem, err := s.WriteToInbox("must survive deletion", CategoryInbox, "global", nil, "claude", "", "")
 	if err != nil {
 		t.Fatalf("write: %v", err)
 	}
@@ -629,7 +632,7 @@ func TestInitBackfillsRawEntries(t *testing.T) {
 func TestInsertMemoryAddsKeywordTags(t *testing.T) {
 	s := tempSqliteStore(t)
 
-	mem, err := s.WriteToInbox("We need state-management for the frontend using react and golang", "global", []string{"user-tag"}, "manual", "", "")
+	mem, err := s.WriteToInbox("We need state-management for the frontend using react and golang", CategoryInbox, "global", []string{"user-tag"}, "manual", "", "")
 	if err != nil {
 		t.Fatalf("write: %v", err)
 	}
@@ -658,7 +661,7 @@ func TestInsertMemoryAutoCategorizes(t *testing.T) {
 	s := tempSqliteStore(t)
 
 	// preference cue → preferences (read from DB; returned struct keeps the input category)
-	mem, err := s.WriteToInbox("I prefer dark theme for the code editor", "global", nil, "manual", "", "")
+	mem, err := s.WriteToInbox("I prefer dark theme for the code editor", CategoryInbox, "global", nil, "manual", "", "")
 	if err != nil {
 		t.Fatalf("write: %v", err)
 	}
@@ -668,7 +671,7 @@ func TestInsertMemoryAutoCategorizes(t *testing.T) {
 	}
 
 	// technical content → knowledge
-	mem2, _ := s.WriteToInbox("the golang api returns json over http", "global", nil, "manual", "", "")
+	mem2, _ := s.WriteToInbox("the golang api returns json over http", CategoryInbox, "global", nil, "manual", "", "")
 	got2, _ := s.Read(mem2.ID)
 	if got2.Category != CategoryKnowledge {
 		t.Errorf("technical content category = %q, want knowledge", got2.Category)
@@ -686,13 +689,13 @@ func TestInsertMemoryAutoCategorizes(t *testing.T) {
 func TestInsertMemoryProjectPersistence(t *testing.T) {
 	s := tempSqliteStore(t)
 
-	if _, err := s.WriteToInbox("makro feature note", "global", nil, "conversations", "makro", ""); err != nil {
+	if _, err := s.WriteToInbox("makro feature note", CategoryInbox, "global", nil, "conversations", "makro", ""); err != nil {
 		t.Fatalf("write makro: %v", err)
 	}
-	if _, err := s.WriteToInbox("fingersaver chat", "global", nil, "fingersaver", "fingersaver", ""); err != nil {
+	if _, err := s.WriteToInbox("fingersaver chat", CategoryInbox, "global", nil, "fingersaver", "fingersaver", ""); err != nil {
 		t.Fatalf("write fingersaver: %v", err)
 	}
-	if _, err := s.WriteToInbox("no project context", "global", nil, "manual", "", ""); err != nil {
+	if _, err := s.WriteToInbox("no project context", CategoryInbox, "global", nil, "manual", "", ""); err != nil {
 		t.Fatalf("write empty: %v", err)
 	}
 
@@ -711,7 +714,7 @@ func TestInsertMemoryProjectPersistence(t *testing.T) {
 // and the result is queryable via IsConsumed.
 func TestMarkConsumedAtomicAndIdempotent(t *testing.T) {
 	s := tempSqliteStore(t)
-	mem, err := s.WriteToInbox("consume me", "global", nil, "test", "", "")
+	mem, err := s.WriteToInbox("consume me", CategoryInbox, "global", nil, "test", "", "")
 	if err != nil {
 		t.Fatalf("write: %v", err)
 	}
@@ -754,7 +757,7 @@ func TestMarkConsumedAtomicAndIdempotent(t *testing.T) {
 // do not lose each other's marks (the race the old read-modify-write had).
 func TestMarkConsumedConcurrent(t *testing.T) {
 	s := tempSqliteStore(t)
-	mem, err := s.WriteToInbox("concurrent consume", "global", nil, "test", "", "")
+	mem, err := s.WriteToInbox("concurrent consume", CategoryInbox, "global", nil, "test", "", "")
 	if err != nil {
 		t.Fatalf("write: %v", err)
 	}
@@ -779,5 +782,316 @@ func TestMarkConsumedConcurrent(t *testing.T) {
 	want := int64(ConsumerFactProcessor | ConsumerConsolidateLLM | ConsumerEnrichTags)
 	if got.ConsumedMask != want {
 		t.Errorf("after concurrent marks, consumed_mask = %d, want %d (a consumer's bit was lost — race)", got.ConsumedMask, want)
+	}
+}
+
+// TestBuildTrigramMatch unit-tests the MATCH expression builder. Trigram can only match
+// substrings of ≥3 codepoints, so any shorter keyword must force a SearchLike fallback.
+func TestBuildTrigramMatch(t *testing.T) {
+	cases := []struct {
+		in   string
+		want string
+	}{
+		{"hello", `"hello"`},                          // single ASCII token
+		{"橘粒科技", `"橘粒科技"`},                        // single CJK token
+		{"橘粒科技 网站开发", `"橘粒科技" OR "网站开发"`},        // multi-word, all ≥3 runes
+		{"a OR b", ``},                                // OR-syntax split, both <3 → fallback
+		{"合同 报价", ``},                                // 2-rune CJK keywords → fallback
+		{"hello 合同", ``},                              // mixed long/short → fallback (no silent drop)
+		{"say \"hi\"", `"say" OR """hi"""`},           // both split keywords ≥3 runes (quotes count)
+		{`say "hello"`, `"say" OR """hello"""`},       // embedded quotes escaped per-keyword
+		{"", ``},                                      // empty
+		{"   ", ``},                                   // whitespace only
+	}
+	for _, c := range cases {
+		if got := buildTrigramMatch(c.in); got != c.want {
+			t.Errorf("buildTrigramMatch(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+// TestSearchCJKViaFTS verifies CJK queries now hit the trigram FTS index (previously the
+// unicode61 tokenizer couldn't segment CJK, so anything but a single ASCII token fell back
+// to SearchLike's full-table LIKE scan). All keywords here are ≥3 runes → FTS path.
+func TestSearchCJKViaFTS(t *testing.T) {
+	s := tempSqliteStore(t)
+
+	s.Write("橘粒科技和瑞福莱暖通签订网站开发合同", PhaseOrganized, CategoryKnowledge, "global", nil, "test")
+	s.Write("项目技术架构采用 React + Next.js", PhaseOrganized, CategoryKnowledge, "global", nil, "test")
+
+	// Single CJK token — substring anywhere in content, via trigram inverted index.
+	results, err := s.Search(SearchOptions{Query: "瑞福莱暖通"})
+	if err != nil {
+		t.Fatalf("search: %v", err)
+	}
+	if len(results) != 1 || !strings.Contains(results[0].Content, "瑞福莱") {
+		t.Errorf("single CJK token via FTS: got %d results", len(results))
+	}
+
+	// Multi-word CJK query where every keyword is ≥3 runes → also the FTS path now.
+	results, err = s.Search(SearchOptions{Query: "橘粒科技 网站开发"})
+	if err != nil {
+		t.Fatalf("search: %v", err)
+	}
+	if len(results) != 1 || !strings.Contains(results[0].Content, "橘粒") {
+		t.Errorf("multi-word CJK via FTS: got %d results", len(results))
+	}
+}
+
+// TestSearchShortCJKKeywordFallback: trigram can't match <3-rune keywords (e.g. "合同"),
+// so such queries must fall back to SearchLike and still return correct results.
+func TestSearchShortCJKKeywordFallback(t *testing.T) {
+	s := tempSqliteStore(t)
+
+	s.Write("橘粒科技和瑞福莱暖通签订网站开发合同，报价5万4", PhaseOrganized, CategoryKnowledge, "global", nil, "test")
+	s.Write("unrelated note about weather", PhaseOrganized, CategoryKnowledge, "global", nil, "test")
+
+	results, err := s.Search(SearchOptions{Query: "橘粒科技 合同 报价"})
+	if err != nil {
+		t.Fatalf("search: %v", err)
+	}
+	if len(results) == 0 {
+		t.Fatal("short-keyword fallback returned 0 results — SearchLike fallback broken")
+	}
+	if !strings.Contains(results[0].Content, "合同") {
+		t.Errorf("top result should be the contract memory, got %q", results[0].Content)
+	}
+}
+
+// TestSearchHybridStrategy exercises the hybrid RRF fusion with the new trigram dispatch:
+// SearchLike must receive the RAW query (not the MATCH expression) or keyword splitting breaks.
+func TestSearchHybridStrategy(t *testing.T) {
+	s := tempSqliteStore(t)
+	s.searchStrategy = "hybrid"
+
+	s.Write("橘粒科技和瑞福莱暖通签订网站开发合同，报价5万4", PhaseOrganized, CategoryKnowledge, "global", nil, "test")
+	s.Write("dark mode preference", PhaseOrganized, CategoryPreferences, "global", nil, "test")
+
+	results, err := s.Search(SearchOptions{Query: "橘粒科技 报价"})
+	if err != nil {
+		t.Fatalf("hybrid search: %v", err)
+	}
+	if len(results) == 0 {
+		t.Fatal("hybrid strategy returned 0 results — SearchLike likely received the MATCH expression")
+	}
+
+	results, err = s.Search(SearchOptions{Query: "dark"})
+	if err != nil {
+		t.Fatalf("hybrid ascii search: %v", err)
+	}
+	if len(results) != 1 {
+		t.Errorf("hybrid ascii results = %d, want 1", len(results))
+	}
+}
+
+// TestMigrateFTSTokenizer simulates an old database whose memories_fts still uses the
+// unicode61 tokenizer: on reopen, migrateFTSTokenizer must rebuild it with trigram and
+// reindex content+tags from the source tables.
+func TestMigrateFTSTokenizer(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test.db")
+
+	s, err := NewSqliteStore(dbPath)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	s.Write("橘粒科技和瑞福莱暖通签订网站开发合同", PhaseOrganized, CategoryKnowledge, "global", []string{"签约"}, "test")
+	s.Close()
+
+	// Downgrade to the old tokenizer, simulating a pre-migration database.
+	{
+		db, err := sql.Open("sqlite", dbPath)
+		if err != nil {
+			t.Fatalf("reopen raw: %v", err)
+		}
+		db.Exec("DROP TABLE memories_fts")
+		db.Exec(`CREATE VIRTUAL TABLE memories_fts USING fts5(
+			memory_id UNINDEXED, content, tags, scope, source, tokenize='unicode61')`)
+		db.Exec(`INSERT INTO memories_fts (memory_id, content, tags, scope, source)
+			SELECT m.id, m.content,
+			       COALESCE((SELECT group_concat(t.tag, ' ') FROM tags t WHERE t.memory_id = m.id), ''),
+			       m.scope, m.source
+			FROM memories m`)
+		db.Close()
+	}
+
+	// Reopen through the normal path — migration should fire and rebuild with trigram.
+	s2, err := NewSqliteStore(dbPath)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer s2.Close()
+
+	var createSQL string
+	if err := s2.DB().QueryRow(
+		"SELECT sql FROM sqlite_master WHERE name='memories_fts'").Scan(&createSQL); err != nil {
+		t.Fatalf("read schema: %v", err)
+	}
+	if !strings.Contains(createSQL, "trigram") {
+		t.Errorf("memories_fts still not trigram: %q", createSQL)
+	}
+
+	// Reindexed content must be searchable via the FTS path (single CJK token, ≥3 runes).
+	results, err := s2.Search(SearchOptions{Query: "瑞福莱暖通"})
+	if err != nil {
+		t.Fatalf("search after migration: %v", err)
+	}
+	if len(results) != 1 {
+		t.Errorf("post-migration search results = %d, want 1 (backfill lost rows?)", len(results))
+	}
+
+	// Migration must be idempotent — a second reopen is a no-op (still trigram, still searchable).
+	s2.Close()
+	s3, err := NewSqliteStore(dbPath)
+	if err != nil {
+		t.Fatalf("third open: %v", err)
+	}
+	defer s3.Close()
+	if results, _ := s3.Search(SearchOptions{Query: "瑞福莱暖通"}); len(results) != 1 {
+		t.Errorf("results after idempotent re-migration = %d, want 1", len(results))
+	}
+}
+
+// TestIngestMemoryValidationGate: the command gate (DDIA ch3) rejects garbage BEFORE the
+// event is appended — raw_entries must not grow on rejected writes.
+func TestIngestMemoryValidationGate(t *testing.T) {
+	s := tempSqliteStore(t)
+
+	rejected := []struct {
+		name string
+		mem  *Memory
+	}{
+		{"empty content", &Memory{Content: "", Phase: PhaseInbox}},
+		{"whitespace only", &Memory{Content: "   \n\t  ", Phase: PhaseInbox}},
+		{"oversize", &Memory{Content: strings.Repeat("x", MaxContentLen+1), Phase: PhaseInbox}},
+		{"invalid phase", &Memory{Content: "ok content", Phase: Phase("bogus")}},
+	}
+	for _, r := range rejected {
+		if err := s.IngestMemory(r.mem); err == nil {
+			t.Errorf("%s: expected rejection, got nil", r.name)
+		}
+	}
+	count, _ := s.RawEntryCount()
+	if count != 0 {
+		t.Errorf("raw_entries = %d after rejected writes, want 0 (garbage must not become permanent events)", count)
+	}
+
+	// Normalization: invalid category falls back to inbox (auto-categorized later);
+	// content is trimmed before hashing.
+	mem := &Memory{Content: "  用户偏好深色模式  ", Phase: PhaseInbox, Category: Category("not-a-cat"), Tags: []string{" ui ", "", "ui"}}
+	if err := s.IngestMemory(mem); err != nil {
+		t.Fatalf("valid write rejected: %v", err)
+	}
+	if mem.Content != "用户偏好深色模式" {
+		t.Errorf("content not trimmed: %q", mem.Content)
+	}
+	got, _ := s.FindByID(mem.ID)
+	if got.Category == Category("not-a-cat") {
+		t.Errorf("invalid category persisted: %q", got.Category)
+	}
+	if len(got.Tags) != len(normalizeTags(got.Tags)) {
+		t.Errorf("tags not normalized: %v", got.Tags)
+	}
+}
+
+// TestRawEntryCarriesProvenance: the event log is self-contained (fat events) — provenance
+// is captured on first append, and a dedup hit backfills provenance it lacks without
+// creating a second event.
+func TestRawEntryCarriesProvenance(t *testing.T) {
+	s := tempSqliteStore(t)
+
+	first := &Memory{Content: "瑞福莱暖通签订合同", Phase: PhaseInbox, Source: "claude", Project: "memory-cli"}
+	if err := s.IngestMemory(first); err != nil {
+		t.Fatalf("first ingest: %v", err)
+	}
+	// Same content again, now with richer provenance — must NOT create a second event.
+	second := &Memory{Content: "瑞福莱暖通签订合同", Phase: PhaseInbox, Source: "claude",
+		Project: "memory-cli", TmuxSession: "work", GitBranch: "feat/cqrs", PromptID: "p-42"}
+	if err := s.IngestMemory(second); err != nil {
+		t.Fatalf("second ingest: %v", err)
+	}
+	count, _ := s.RawEntryCount()
+	if count != 1 {
+		t.Fatalf("raw_entries = %d, want 1 (dedup must not add events)", count)
+	}
+
+	entries, err := s.ListRawEntries()
+	if err != nil {
+		t.Fatalf("ListRawEntries: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("entries = %d, want 1", len(entries))
+	}
+	e := entries[0]
+	if e.Project != "memory-cli" || e.TmuxSession != "work" || e.GitBranch != "feat/cqrs" || e.PromptID != "p-42" {
+		t.Errorf("event provenance incomplete: %+v", e)
+	}
+}
+
+// TestRebuildIndexes: safe rebuild restores the FTS index after damage.
+func TestRebuildIndexes(t *testing.T) {
+	s := tempSqliteStore(t)
+	s.Write("瑞福莱暖通的网站开发合同", PhaseOrganized, CategoryKnowledge, "global", nil, "test")
+
+	// Simulate index damage: wipe the FTS table.
+	s.db.Exec("DELETE FROM memories_fts")
+	if r, _ := s.Search(SearchOptions{Query: "瑞福莱暖通"}); len(r) != 0 {
+		t.Fatalf("precondition failed: expected 0 results with wiped FTS")
+	}
+
+	stats, err := s.RebuildIndexes()
+	if err != nil {
+		t.Fatalf("RebuildIndexes: %v", err)
+	}
+	if stats.FTSRows != 1 {
+		t.Errorf("FTSRows = %d, want 1", stats.FTSRows)
+	}
+	if r, _ := s.Search(SearchOptions{Query: "瑞福莱暖通"}); len(r) != 1 {
+		t.Errorf("search after rebuild = %d results, want 1", len(r))
+	}
+}
+
+// TestRebuildFromEvents: full replay wipes the derived layer and rebuilds it from the
+// event log — content, provenance and searchability survive; phase resets to inbox.
+func TestRebuildFromEvents(t *testing.T) {
+	s := tempSqliteStore(t)
+
+	s.Write("瑞福莱暖通的网站开发合同", PhaseOrganized, CategoryKnowledge, "global", nil, "test")
+	s.IngestMemory(&Memory{Content: "用户偏好深色主题", Phase: PhaseInbox, Source: "claude", Project: "proj-a", PromptID: "p-7"})
+
+	before, _ := s.ListRawEntries()
+	if len(before) != 2 {
+		t.Fatalf("seed events = %d, want 2", len(before))
+	}
+
+	stats, err := s.RebuildFromEvents()
+	if err != nil {
+		t.Fatalf("RebuildFromEvents: %v", err)
+	}
+	if stats.Rebuilt != 2 || stats.Skipped != 0 {
+		t.Errorf("rebuilt=%d skipped=%d, want 2/0", stats.Rebuilt, stats.Skipped)
+	}
+
+	// Searchability survives.
+	if r, _ := s.Search(SearchOptions{Query: "瑞福莱暖通"}); len(r) != 1 {
+		t.Errorf("CJK search after full rebuild = %d results, want 1", len(r))
+	}
+	// Provenance survives replay.
+	if r, _ := s.Search(SearchOptions{Query: "用户偏好"}); len(r) != 1 {
+		t.Fatalf("search for provenance-carrying memory failed")
+	} else if r[0].Project != "proj-a" || r[0].PromptID != "p-7" {
+		t.Errorf("provenance lost in replay: project=%q prompt=%q", r[0].Project, r[0].PromptID)
+	}
+	// Phase resets to inbox — daemon re-derives processing state.
+	all, _ := s.List(ListOptions{})
+	for _, m := range all {
+		if m.Phase != PhaseInbox {
+			t.Errorf("replayed memory phase = %q, want inbox", m.Phase)
+		}
+	}
+	// The event log itself is untouched.
+	after, _ := s.ListRawEntries()
+	if len(after) != 2 {
+		t.Errorf("events after rebuild = %d, want 2 (log must be untouched)", len(after))
 	}
 }

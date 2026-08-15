@@ -55,14 +55,14 @@ func (s *FileStore) Init() error {
 	return nil
 }
 
-func (s *FileStore) WriteToInbox(content string, scope string, tags []string, source string, project string, tmuxSession string) (*Memory, error) {
+func (s *FileStore) WriteToInbox(content string, category Category, scope string, tags []string, source string, project string, tmuxSession string) (*Memory, error) {
 	now := time.Now()
 	mem := &Memory{
 		ID:          uuid.New().String(),
 		Content:     content,
 		ContentHash: HashContent(content),
 		Phase:       PhaseInbox,
-		Category:    CategoryInbox,
+		Category:    category,
 		Scope:       defaultString(scope, "global"),
 		Tags:        tags,
 		Source:      defaultString(source, "manual"),
@@ -433,6 +433,15 @@ func defaultString(val, def string) string {
 		return def
 	}
 	return val
+}
+
+// defaultCategory maps an empty category to inbox (so the auto-categorizer decides) while
+// passing explicit categories through untouched.
+func defaultCategory(cat Category) Category {
+	if cat == "" {
+		return CategoryInbox
+	}
+	return cat
 }
 
 func HashContent(content string) string {

@@ -42,6 +42,15 @@ func (t *MemoryWriteTool) Execute(ctx context.Context, params map[string]any) (T
 	scope, _ := params["scope"].(string)
 	source, _ := params["source"].(string)
 
+	// Honor the advertised category param (previously accepted then silently dropped).
+	// Invalid values fall back to inbox so the auto-categorizer decides.
+	category := store.CategoryInbox
+	if raw, ok := params["category"].(string); ok && raw != "" {
+		if store.IsValidCategory(store.Category(raw)) {
+			category = store.Category(raw)
+		}
+	}
+
 	var tags []string
 	if raw, ok := params["tags"].(string); ok {
 		tags = parseTags(raw)
@@ -50,7 +59,7 @@ func (t *MemoryWriteTool) Execute(ctx context.Context, params map[string]any) (T
 	var mem *store.Memory
 	var err error
 
-	mem, err = t.store.WriteToInbox(content, scope, tags, source, ingest.CurrentProject(), ingest.CurrentTmuxSession())
+	mem, err = t.store.WriteToInbox(content, category, scope, tags, source, ingest.CurrentProject(), ingest.CurrentTmuxSession())
 	if err != nil {
 		return ErrResult(fmt.Sprintf("write failed: %v", err)), err
 	}

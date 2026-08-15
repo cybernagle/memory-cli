@@ -3,6 +3,7 @@ package store
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"math"
@@ -117,11 +118,69 @@ func (s *SqliteStore) init() error {
 	s.db.Exec(`UPDATE memories SET raw_entry_id = content_hash
 		WHERE raw_entry_id IS NULL AND content_hash != ''`)
 
+	// Migrate: fatten the raw_entries event log with provenance columns (idempotent ALTERs —
+	// SQLite errors "duplicate column name" on re-run and the error is discarded, matching
+	// the existing migration pattern). New DBs get them from the schema const.
+	for _, col := range []string{
+		"session_id", "project", "tmux_session", "message_uuid", "parent_uuid",
+		"role", "git_branch", "model", "prompt_id",
+	} {
+		s.db.Exec("ALTER TABLE raw_entries ADD COLUMN " + col + " TEXT NOT NULL DEFAULT ''")
+	}
+	s.backfillRawEntryProvenance()
+
+	// Migrate: rebuild memories_fts with the trigram tokenizer if it still uses unicode61.
+	// unicode61 can't segment CJK, forcing multi-word/Chinese queries onto SearchLike's
+	// full-table LIKE scan. Trigram indexes every ≥3-char substring (DDIA ch4, n-gram
+	// inverted index), and also accelerates LIKE '%kw%' on the FTS table itself.
+	s.migrateFTSTokenizer()
+
 	return nil
 }
 
 func (s *SqliteStore) Close() error {
 	return s.db.Close()
+}
+
+// migrateFTSTokenizer rebuilds memories_fts if it still uses the unicode61 tokenizer.
+// Idempotent: after the rebuild the CREATE statement in sqlite_master contains 'trigram',
+// so subsequent inits are a no-op. Backfill mirrors InsertMemory's FTS write exactly
+// (tags joined by spaces) so search behavior is identical before/after migration.
+// backfillRawEntryProvenance copies provenance from memories into legacy event rows
+// (written before the event log carried provenance). Idempotent: only empty event columns
+// are filled, and it skips entirely once no row needs it.
+func (s *SqliteStore) backfillRawEntryProvenance() {
+	var needs bool
+	s.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM raw_entries WHERE session_id='' AND project=''
+		AND tmux_session='' AND message_uuid='' AND prompt_id='')`).Scan(&needs)
+	if !needs {
+		return
+	}
+	s.db.Exec(`UPDATE raw_entries AS r SET
+		session_id   = CASE WHEN r.session_id=''   AND m.session_id!=''   THEN m.session_id   ELSE r.session_id END,
+		project      = CASE WHEN r.project=''      AND m.project!=''      THEN m.project      ELSE r.project END,
+		tmux_session = CASE WHEN r.tmux_session='' AND m.tmux_session!='' THEN m.tmux_session ELSE r.tmux_session END,
+		message_uuid = CASE WHEN r.message_uuid='' AND m.message_uuid!='' THEN m.message_uuid ELSE r.message_uuid END,
+		parent_uuid  = CASE WHEN r.parent_uuid=''  AND m.parent_uuid!=''  THEN m.parent_uuid  ELSE r.parent_uuid END,
+		role         = CASE WHEN r.role=''         AND m.role!=''         THEN m.role         ELSE r.role END,
+		git_branch   = CASE WHEN r.git_branch=''   AND m.git_branch!=''   THEN m.git_branch   ELSE r.git_branch END,
+		model        = CASE WHEN r.model=''        AND m.model!=''        THEN m.model        ELSE r.model END,
+		prompt_id    = CASE WHEN r.prompt_id=''    AND m.prompt_id!=''    THEN m.prompt_id    ELSE r.prompt_id END
+	FROM memories m
+	WHERE m.raw_entry_id = r.id`)
+}
+
+func (s *SqliteStore) migrateFTSTokenizer() {
+	var createSQL string
+	err := s.db.QueryRow(
+		"SELECT sql FROM sqlite_master WHERE type='table' AND name='memories_fts'").Scan(&createSQL)
+	if err != nil || createSQL == "" {
+		return // no FTS table (fresh DB — schema const already creates it with trigram)
+	}
+	if !strings.Contains(createSQL, "unicode61") {
+		return // already trigram
+	}
+	s.rebuildFTS()
 }
 
 func (s *SqliteStore) migrateLinksTable() {
@@ -146,7 +205,7 @@ func (s *SqliteStore) migrateLinksTable() {
 	s.db.Exec("PRAGMA foreign_keys=ON")
 }
 
-func (s *SqliteStore) WriteToInbox(content string, scope string, tags []string, source string, project string, tmuxSession string) (*Memory, error) {
+func (s *SqliteStore) WriteToInbox(content string, category Category, scope string, tags []string, source string, project string, tmuxSession string) (*Memory, error) {
 	ttl, err := parseDuration("168h")
 	if err != nil {
 		ttl = 168 * time.Hour
@@ -155,7 +214,7 @@ func (s *SqliteStore) WriteToInbox(content string, scope string, tags []string, 
 	mem := &Memory{
 		Content:     content,
 		Phase:       PhaseInbox,
-		Category:    CategoryInbox,
+		Category:    defaultCategory(category),
 		Scope:       defaultString(scope, "global"),
 		Tags:        tags,
 		Source:      defaultString(source, "manual"),
@@ -620,6 +679,43 @@ func (s *SqliteStore) FindByHash(hash string) (*Memory, error) {
 	return mem, nil
 }
 
+// splitQueryKeywords splits a raw query into lowercase keywords. Two delimiter families:
+//   - " OR " / "|"  → produced by LLM keyword extraction ("keyword1 OR keyword2")
+//   - whitespace / comma → produced by multi-word user queries ("橘粒科技 合同 报价")
+func splitQueryKeywords(query string) []string {
+	keywordStr := strings.ToLower(query)
+	keywordStr = strings.ReplaceAll(keywordStr, " or ", "|")
+	keywords := strings.FieldsFunc(keywordStr, func(r rune) bool {
+		return r == '|' || r == ' ' || r == '\t' || r == ',' || r == '，'
+	})
+	for i, k := range keywords {
+		keywords[i] = strings.TrimSpace(k)
+	}
+	return keywords
+}
+
+// buildTrigramMatch converts a raw query into an FTS5 MATCH expression usable with the
+// trigram tokenizer: each keyword becomes a quoted phrase, keywords joined with OR —
+// mirroring SearchLike's any-keyword-matches semantics, with ranking (bm25 or
+// created_at) supplying precision. Trigram can only match substrings of ≥3 codepoints,
+// so if ANY keyword is shorter (e.g. "合同") it returns "" and callers fall back to
+// SearchLike rather than silently dropping that keyword from the match set.
+func buildTrigramMatch(query string) string {
+	keywords := splitQueryKeywords(query)
+	if len(keywords) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(keywords))
+	for _, kw := range keywords {
+		if len([]rune(kw)) < 3 {
+			return ""
+		}
+		// Escape embedded double quotes so the FTS phrase syntax stays valid.
+		parts = append(parts, `"`+strings.ReplaceAll(kw, `"`, `""`)+`"`)
+	}
+	return strings.Join(parts, " OR ")
+}
+
 func (s *SqliteStore) Search(opts SearchOptions) ([]*Memory, error) {
 	if opts.Query == "" {
 		return s.List(ListOptions{
@@ -630,59 +726,28 @@ func (s *SqliteStore) Search(opts SearchOptions) ([]*Memory, error) {
 		})
 	}
 
-	// Multi-word queries (contains whitespace) bypass FTS5 and go straight to SearchLike.
-	// FTS5's unicode61 tokenizer can't segment CJK, so a query like "橘粒科技 合同 报价" becomes
-	// one giant token under MATCH's default AND semantics → 0 results (ISSUE-001). SearchLike
-	// splits on whitespace and scores each keyword by IDF, which handles multi-word + CJK
-	// correctly. Single-token queries (no spaces) still benefit from FTS5's BM25 ranking.
-	if strings.ContainsAny(opts.Query, " \t") {
+	// Trigram tokenizer: CJK and multi-word queries can now use the FTS inverted index.
+	// buildTrigramMatch splits the query into keywords (same splitting as SearchLike) and
+	// wraps each as an FTS phrase joined with OR — preserving SearchLike's OR semantics,
+	// with bm25/created_at handling precision via ranking. Trigram can only match
+	// substrings of ≥3 codepoints, so if ANY keyword is shorter (e.g. "合同"), the whole
+	// query falls back to SearchLike (the pre-trigram path) for correctness.
+	match := buildTrigramMatch(opts.Query)
+	if match == "" {
 		return s.SearchLike(opts)
 	}
+	// ftsOpts carries the MATCH expression for FTS paths; opts keeps the raw query for
+	// SearchLike (which re-splits keywords itself and must not see the MATCH syntax).
+	ftsOpts := opts
+	ftsOpts.Query = match
 
-	// Try FTS5 first, with space/time filters pushed into SQL (not post-fetch Go filtering).
-	// Building the WHERE dynamically so each set filter is a real indexed predicate.
-	query := `
-		SELECT m.id, m.content, m.content_hash, m.phase, m.category, m.scope, m.source,
-		       m.session_id, m.created_at, m.updated_at, m.expires_at, m.access_count, m.version, m.processed_by, m.project, m.tmux_session, m.consumed_mask,
-		       m.message_uuid, m.parent_uuid, m.role, m.git_branch, m.model, m.prompt_id, m.metadata
-		FROM memories m
-		WHERE m.id IN (
-			SELECT memory_id FROM memories_fts WHERE memories_fts MATCH ?
-		)`
-	args := []interface{}{opts.Query}
-	if opts.Phase != "" {
-		query += " AND m.phase = ?"
-		args = append(args, string(opts.Phase))
-	}
-	if opts.Scope != "" {
-		query += " AND m.scope = ?"
-		args = append(args, opts.Scope)
-	}
-	if opts.Project != "" {
-		query += " AND m.project = ?"
-		args = append(args, opts.Project)
-	}
-	if opts.SessionID != "" {
-		query += " AND m.session_id = ?"
-		args = append(args, opts.SessionID)
-	}
-	if opts.Category != "" {
-		query += " AND m.category = ?"
-		args = append(args, string(opts.Category))
-	}
-	if opts.From != nil {
-		query += " AND m.created_at >= ?"
-		args = append(args, opts.From.Format(time.RFC3339))
-	}
-	if opts.To != nil {
-		query += " AND m.created_at <= ?"
-		args = append(args, opts.To.Format(time.RFC3339))
-	}
 	// Strategy dispatch: hybrid fuses BM25+IDF via RRF; bm25/idf delegate to searchFTS.
+	// searchFTS receives ftsOpts (MATCH expression); searchHybrid receives both so its
+	// SearchLike arm keeps splitting the raw query.
 	if s.searchStrategy == "hybrid" {
-		return s.searchHybrid(opts)
+		return s.searchHybrid(opts, ftsOpts)
 	}
-	return s.searchFTS(opts, s.searchStrategy == "bm25")
+	return s.searchFTS(ftsOpts, s.searchStrategy == "bm25")
 }
 
 // searchFTS runs the FTS5 query built by Search, with optional BM25 relevance ordering.
@@ -775,13 +840,14 @@ func (s *SqliteStore) searchFTS(opts SearchOptions, bm25 bool) ([]*Memory, error
 //
 //	RRF_score(doc) = Σ 1/(k + rank_in_each_list)   where k=60 (standard constant)
 //
-// This combines BM25's strength (English/segmented text, term frequency saturation) with
-// IDF+LIKE's strength (Chinese entity names via CJK prefix matching). A doc ranked #1 in
+// This combines BM25's strength (trigram substring matching, term frequency saturation) with
+// IDF+LIKE's strength (short CJK keywords + entity prefix fallback). A doc ranked #1 in
 // IDF but #50 in BM25 still scores well; a doc ranked #1 in both dominates.
-func (s *SqliteStore) searchHybrid(opts SearchOptions) ([]*Memory, error) {
+// ftsOpts carries the prebuilt MATCH expression; opts carries the raw query for SearchLike.
+func (s *SqliteStore) searchHybrid(opts SearchOptions, ftsOpts SearchOptions) ([]*Memory, error) {
 	// Run FTS directly (NOT via s.Search to avoid recursion — Search would re-enter
 	// searchHybrid). We build the FTS query inline with BM25 ordering.
-	ftsResults, _ := s.searchFTS(opts, true) // true = BM25 ordering
+	ftsResults, _ := s.searchFTS(ftsOpts, true) // true = BM25 ordering
 
 	// Run SearchLike (IDF + CJK prefix + boost).
 	likeResults, _ := s.SearchLike(opts)
@@ -820,21 +886,13 @@ func (s *SqliteStore) searchHybrid(opts SearchOptions) ([]*Memory, error) {
 }
 
 func (s *SqliteStore) SearchLike(opts SearchOptions) ([]*Memory, error) {
-	// Split the query into keywords. Two delimiter families:
+	// Split the query into keywords via the shared splitter (same families as FTS path):
 	//   - " OR " / "|"  → produced by LLM keyword extraction ("keyword1 OR keyword2")
 	//   - whitespace     → produced by multi-word user queries ("橘粒科技 合同 报价 项目")
-	// Splitting on whitespace too fixes ISSUE-001: without it a multi-word query collapsed into
-	// a single keyword (the whole string) and matched nothing. CJK entity names like
-	// "瑞福莱暖通设备" never contain spaces, so whitespace-splitting does not break them — the
-	// IDF + CJK-prefix logic below still treats each such token as one indivisible keyword.
-	keywordStr := strings.ToLower(opts.Query)
-	keywordStr = strings.ReplaceAll(keywordStr, " or ", "|")
-	keywords := strings.FieldsFunc(keywordStr, func(r rune) bool {
-		return r == '|' || r == ' ' || r == '\t' || r == ',' || r == '，'
-	})
-	for i, k := range keywords {
-		keywords[i] = strings.TrimSpace(k)
-	}
+	// CJK entity names like "瑞福莱暖通设备" never contain spaces, so whitespace-splitting
+	// does not break them — the IDF + CJK-prefix logic below still treats each such token
+	// as one indivisible keyword.
+	keywords := splitQueryKeywords(opts.Query)
 
 	// Compute total doc count for IDF denominator.
 	var totalDocs int
@@ -865,7 +923,7 @@ func (s *SqliteStore) SearchLike(opts SearchOptions) ([]*Memory, error) {
 		}
 		return w
 	}
-	kwWeight := make(map[string]float64)      // full-keyword IDF
+	kwWeight := make(map[string]float64)     // full-keyword IDF
 	prefixWeight := make(map[string]float64) // best-matching CJK-prefix IDF (fallback)
 	prefixStr := make(map[string]string)     // the actual prefix substring to test per-memory
 	for _, kw := range keywords {
@@ -873,7 +931,14 @@ func (s *SqliteStore) SearchLike(opts SearchOptions) ([]*Memory, error) {
 			continue
 		}
 		var cnt int
-		s.db.QueryRow("SELECT COUNT(*) FROM memories WHERE lower(content) LIKE ?", "%"+kw+"%").Scan(&cnt)
+		// IDF probe. ≥3-char patterns probe the trigram-indexed FTS table (indexed LIKE,
+		// DDIA ch4 n-gram inverted index); shorter patterns keep the old memories scan —
+		// trigram can't accelerate them, and the FTS table is larger than memories.
+		if len([]rune(kw)) >= 3 {
+			s.db.QueryRow("SELECT COUNT(*) FROM memories_fts WHERE content LIKE ?", "%"+kw+"%").Scan(&cnt)
+		} else {
+			s.db.QueryRow("SELECT COUNT(*) FROM memories WHERE lower(content) LIKE ?", "%"+kw+"%").Scan(&cnt)
+		}
 		if cnt > 0 {
 			kwWeight[kw] = idf(cnt)
 		}
@@ -892,7 +957,11 @@ func (s *SqliteStore) SearchLike(opts SearchOptions) ([]*Memory, error) {
 		for n := len(runes) - 1; n >= 2; n-- {
 			sub := string(runes[:n])
 			var subCnt int
-			s.db.QueryRow("SELECT COUNT(*) FROM memories WHERE lower(content) LIKE ?", "%"+sub+"%").Scan(&subCnt)
+			if n >= 3 {
+				s.db.QueryRow("SELECT COUNT(*) FROM memories_fts WHERE content LIKE ?", "%"+sub+"%").Scan(&subCnt)
+			} else {
+				s.db.QueryRow("SELECT COUNT(*) FROM memories WHERE lower(content) LIKE ?", "%"+sub+"%").Scan(&subCnt)
+			}
 			if subCnt > 0 {
 				prefixWeight[kw] = idf(subCnt)
 				prefixStr[kw] = sub
@@ -901,9 +970,74 @@ func (s *SqliteStore) SearchLike(opts SearchOptions) ([]*Memory, error) {
 		}
 	}
 
-	memories, err := s.List(ListOptions{Phase: opts.Phase, Scope: opts.Scope})
+	// Candidate fetch: load only rows matching at least one keyword or its precomputed CJK
+	// prefix fallback — the trigram index accelerates each ≥3-char LIKE, replacing the old
+	// full-corpus s.List() load + in-Go filtering. Short patterns stay correct via plain
+	// LIKE, just without index acceleration. Scoring below is unchanged.
+	var subq strings.Builder
+	subq.WriteString("SELECT memory_id FROM memories_fts WHERE ")
+	candArgs := make([]interface{}, 0, 2*len(keywords))
+	seenPat := make(map[string]bool, 2*len(keywords))
+	addPat := func(pat string) {
+		if pat == "" || seenPat[pat] {
+			return
+		}
+		seenPat[pat] = true
+		if len(candArgs) > 0 {
+			subq.WriteString(" OR ")
+		}
+		subq.WriteString("content LIKE ?")
+		candArgs = append(candArgs, "%"+pat+"%")
+	}
+	for _, kw := range keywords {
+		addPat(kw)
+		addPat(prefixStr[kw])
+	}
+	query := `
+		SELECT m.id, m.content, m.content_hash, m.phase, m.category, m.scope, m.source,
+		       m.session_id, m.created_at, m.updated_at, m.expires_at, m.access_count, m.version, m.processed_by, m.project, m.tmux_session, m.consumed_mask,
+		       m.message_uuid, m.parent_uuid, m.role, m.git_branch, m.model, m.prompt_id, m.metadata
+		FROM memories m
+		WHERE m.id IN (` + subq.String() + `) AND m.phase != ''
+	`
+	if opts.Phase != "" {
+		query = strings.Replace(query, "AND m.phase != ''", "AND m.phase = ?", 1)
+		candArgs = append(candArgs, string(opts.Phase))
+	} else {
+		query = strings.Replace(query, " AND m.phase != ''", "", 1)
+	}
+	if opts.Scope != "" {
+		query += " AND m.scope = ?"
+		candArgs = append(candArgs, opts.Scope)
+	}
+	query += " ORDER BY m.created_at DESC"
+
+	rows, err := s.db.Query(query, candArgs...)
 	if err != nil {
 		return nil, err
+	}
+	var memories []*Memory
+	var ids []string
+	for rows.Next() {
+		mem, err := scanMemoryRow(rows)
+		if err != nil {
+			continue
+		}
+		memories = append(memories, mem)
+		ids = append(ids, mem.ID)
+	}
+	rows.Close()
+	tagMap, _ := s.batchLoadTags(ids)
+	linkMap, _ := s.batchLoadLinks(ids)
+	for _, mem := range memories {
+		mem.Tags = tagMap[mem.ID]
+		if mem.Tags == nil {
+			mem.Tags = []string{}
+		}
+		mem.Links = linkMap[mem.ID]
+		if mem.Links == nil {
+			mem.Links = []string{}
+		}
 	}
 
 	type scored struct {
@@ -1191,15 +1325,47 @@ func (s *SqliteStore) InsertMemory(mem *Memory) error {
 	}
 
 	// Append-only raw capture: every memory is recorded in raw_entries and is never deleted.
-	// content_hash is the primary key, so INSERT OR IGNORE dedups identical content idempotently.
+	// content_hash is the primary key, so INSERT OR IGNORE dedups identical content idempotently
+	// (the FIRST event keeps its sequence; provenance below backfills onto the existing row).
 	rawHash := mem.ContentHash
 	if rawHash == "" {
 		rawHash = HashContent(mem.Content)
 	}
 	if _, err = tx.Exec(
-		`INSERT OR IGNORE INTO raw_entries (id, content, source, content_hash) VALUES (?, ?, ?, ?)`,
+		`INSERT OR IGNORE INTO raw_entries
+			(id, content, source, content_hash, session_id, project, tmux_session,
+			 message_uuid, parent_uuid, role, git_branch, model, prompt_id)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		rawHash, mem.Content, mem.Source, rawHash,
+		mem.SessionID, mem.Project, mem.TmuxSession,
+		mem.MessageUUID, mem.ParentUUID, mem.Role, mem.GitBranch, mem.Model, mem.PromptID,
 	); err != nil {
+		tx.Rollback()
+		return err
+	}
+	// Dedup hit (identical content seen before): the event keeps its original rowid/sequence,
+	// but accumulate any provenance this occurrence captured that the event lacks.
+	if _, err = tx.Exec(`UPDATE raw_entries SET
+			session_id   = CASE WHEN session_id=''   AND ?!=''   THEN ? ELSE session_id END,
+			project      = CASE WHEN project=''      AND ?!=''      THEN ? ELSE project END,
+			tmux_session = CASE WHEN tmux_session='' AND ?!='' THEN ? ELSE tmux_session END,
+			message_uuid = CASE WHEN message_uuid='' AND ?!='' THEN ? ELSE message_uuid END,
+			parent_uuid  = CASE WHEN parent_uuid=''  AND ?!=''  THEN ? ELSE parent_uuid END,
+			role         = CASE WHEN role=''         AND ?!=''         THEN ? ELSE role END,
+			git_branch   = CASE WHEN git_branch=''   AND ?!=''   THEN ? ELSE git_branch END,
+			model        = CASE WHEN model=''        AND ?!=''        THEN ? ELSE model END,
+			prompt_id    = CASE WHEN prompt_id=''    AND ?!=''    THEN ? ELSE prompt_id END
+			WHERE id = ?`,
+		mem.SessionID, mem.SessionID,
+		mem.Project, mem.Project,
+		mem.TmuxSession, mem.TmuxSession,
+		mem.MessageUUID, mem.MessageUUID,
+		mem.ParentUUID, mem.ParentUUID,
+		mem.Role, mem.Role,
+		mem.GitBranch, mem.GitBranch,
+		mem.Model, mem.Model,
+		mem.PromptID, mem.PromptID,
+		rawHash); err != nil {
 		tx.Rollback()
 		return err
 	}
@@ -1508,7 +1674,67 @@ func formatTime(t *time.Time) interface{} {
 // CheckAndSupersede lists existing memories and MarkSuperseded writes via s.db — running them
 // on the same tx would risk re-entrancy/deadlock, and the new memory must be committed before
 // it can be the supersede target.
+// MaxContentLen guards against garbage writes (pasted logs, accidental dumps). Events are
+// immutable and never deleted, so a garbage write is permanent — reject before appending.
+const MaxContentLen = 100 * 1024
+
+// Command-gate errors (DDIA ch3: a request is a command; only a validated command becomes
+// an event). Rejected commands leave NO trace in raw_entries.
+var (
+	ErrEmptyContent    = errors.New("memory content is empty")
+	ErrContentTooLarge = fmt.Errorf("memory content exceeds %d bytes", MaxContentLen)
+	ErrInvalidPhase    = errors.New("invalid memory phase")
+)
+
+// normalizeTags trims, drops empties and dedups, preserving first-seen order.
+func normalizeTags(tags []string) []string {
+	seen := make(map[string]bool, len(tags))
+	out := make([]string, 0, len(tags))
+	for _, t := range tags {
+		t = strings.TrimSpace(t)
+		if t == "" || seen[t] {
+			continue
+		}
+		seen[t] = true
+		out = append(out, t)
+	}
+	return out
+}
+
+// IsValidCategory reports whether cat is one of the known categories.
+func IsValidCategory(cat Category) bool {
+	for _, c := range append(append(AllCategories, CategoryInbox), CategoryReminders) {
+		if c == cat {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *SqliteStore) IngestMemory(mem *Memory) error {
+	// ── Command gate ──
+	// Validate and normalize BEFORE the event is appended: raw_entries is append-only and
+	// never deleted, so anything that passes here is permanent. Trim happens before any
+	// hashing so dedup stays consistent (same trimmed content → same hash).
+	mem.Content = strings.TrimSpace(mem.Content)
+	if mem.Content == "" {
+		return ErrEmptyContent
+	}
+	if len(mem.Content) > MaxContentLen {
+		return ErrContentTooLarge
+	}
+	switch mem.Phase {
+	case PhaseInbox, PhaseProcessed, PhaseOrganized:
+	default:
+		return fmt.Errorf("%w: %q", ErrInvalidPhase, mem.Phase)
+	}
+	// Unknown categories fall back to inbox so the auto-categorizer decides, rather than
+	// persisting a category no downstream consumer knows about.
+	if mem.Category != "" && mem.Category != CategoryInbox && !IsValidCategory(mem.Category) {
+		mem.Category = CategoryInbox
+	}
+	mem.Tags = normalizeTags(mem.Tags)
+
 	if mem.ID == "" {
 		mem.ID = uuid.New().String()
 	}

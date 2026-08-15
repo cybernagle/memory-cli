@@ -50,12 +50,24 @@ CREATE TABLE IF NOT EXISTS links (
 
 CREATE INDEX IF NOT EXISTS idx_links_target ON links(target_id);
 
+-- The append-only event log (DDIA ch3 event sourcing). Carries full provenance so the
+-- derived views (memories/tags/links/fts) can be rebuilt from events alone. rowid is the
+-- monotonic event sequence; id (= content_hash) dedups identical content idempotently.
 CREATE TABLE IF NOT EXISTS raw_entries (
     id           TEXT PRIMARY KEY,
     content      TEXT NOT NULL,
     source       TEXT NOT NULL DEFAULT 'manual',
     ingested_at  TEXT NOT NULL DEFAULT (datetime('now')),
-    content_hash TEXT NOT NULL
+    content_hash TEXT NOT NULL,
+    session_id   TEXT NOT NULL DEFAULT '',
+    project      TEXT NOT NULL DEFAULT '',
+    tmux_session TEXT NOT NULL DEFAULT '',
+    message_uuid TEXT NOT NULL DEFAULT '',
+    parent_uuid  TEXT NOT NULL DEFAULT '',
+    role         TEXT NOT NULL DEFAULT '',
+    git_branch   TEXT NOT NULL DEFAULT '',
+    model        TEXT NOT NULL DEFAULT '',
+    prompt_id    TEXT NOT NULL DEFAULT ''
 );
 
 CREATE INDEX IF NOT EXISTS idx_raw_entries_hash ON raw_entries(content_hash);
@@ -93,6 +105,6 @@ CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
     tags,
     scope,
     source,
-    tokenize='unicode61'
+    tokenize='trigram'
 );
 `

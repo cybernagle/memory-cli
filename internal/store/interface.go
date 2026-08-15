@@ -3,7 +3,7 @@ package store
 // Store defines the interface for memory storage backends.
 type Store interface {
 	// CRUD
-	WriteToInbox(content string, scope string, tags []string, source string, project string, tmuxSession string) (*Memory, error)
+	WriteToInbox(content string, category Category, scope string, tags []string, source string, project string, tmuxSession string) (*Memory, error)
 	Write(content string, memType Phase, category Category, scope string, tags []string, source string) (*Memory, error)
 	Read(id string) (*Memory, error)
 	Delete(id string) error
