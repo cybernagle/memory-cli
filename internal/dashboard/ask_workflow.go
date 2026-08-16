@@ -2,6 +2,7 @@ package dashboard
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"regexp"
@@ -31,12 +32,12 @@ type askContext struct {
 	r        *http.Request
 
 	// ── Stage outputs (filled progressively) ──
-	resolvedQuestion string         // Stage 1: context-resolved question
-	intent           string         // Stage 2: detected intent
+	resolvedQuestion string          // Stage 1: context-resolved question
+	intent           string          // Stage 2: detected intent
 	results          []*store.Memory // Stage 3-4: search results (ranked, truncated)
-	prompt           string         // Stage 6: final LLM prompt
-	answer           string         // Stage 7: LLM answer
-	extra            map[string]any // metadata for the response (date, count, etc.)
+	prompt           string          // Stage 6: final LLM prompt
+	answer           string          // Stage 7: LLM answer
+	extra            map[string]any  // metadata for the response (date, count, etc.)
 
 	// ── Intent-specific params (set by Stage 2) ──
 	dateRange    *query.DateRange
@@ -349,6 +350,14 @@ func stageFetchEntity(ctx *askContext) bool {
 	}
 	ctx.extra["searchQuery"] = searchQuery
 
+	// Structured grounding: session digests matching the question's keywords give the
+	// answer stage pre-aggregated task/entity/lesson context (CQRS read model #2).
+	if sqlStore, ok := ctx.srv.store.impl.(*store.SqliteStore); ok {
+		if views, err := sqlStore.SessionViewsMatchingKeywords(query.SplitKeywordsForSnippet(searchQuery), 5); err == nil {
+			ctx.extra["_sessionViews"] = views
+		}
+	}
+
 	// SearchWithExpansion: initial search + frequent-term expansion + newest-first sort.
 	// This finds memories that don't contain the exact query keywords but are topically
 	// related (e.g. "瑞福莱" search expands to "合同" and finds the 6/22 ¥54,000 record).
@@ -516,6 +525,28 @@ func stageBuildEntityPrompt(ctx *askContext) bool {
 	}
 
 	var sb strings.Builder
+	// Session digests first: pre-aggregated per-session views, so "what did I do on X"
+	// questions ground in structured task/lesson summaries rather than raw fragments.
+	if views, ok := ctx.extra["_sessionViews"].([]*store.SessionView); ok && len(views) > 0 {
+		sb.WriteString("=== 相关会话工作摘要 ===\n")
+		for _, v := range views {
+			sb.WriteString(fmt.Sprintf("[%s] task: %s", v.LastSeen[:min(10, len(v.LastSeen))], v.Task))
+			if v.Entity != "" {
+				sb.WriteString(" | entity: " + v.Entity)
+				if v.Facet != "" {
+					sb.WriteString(" / " + v.Facet)
+				}
+			}
+			sb.WriteString("\n" + v.Summary + "\n")
+			var lessons []string
+			if json.Unmarshal([]byte(v.Lessons), &lessons) == nil {
+				for _, l := range lessons {
+					sb.WriteString("  ⚑ " + l + "\n")
+				}
+			}
+		}
+		sb.WriteString("\n=== 原始记忆片段 ===\n")
+	}
 	for i, m := range ctx.results {
 		content := m.Content
 		if len(content) > 300 {
@@ -567,4 +598,3 @@ func stageGenerate(ctx *askContext) bool {
 	ctx.answer = answer
 	return true
 }
-

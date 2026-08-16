@@ -637,6 +637,32 @@ func runAskWorkflowMCP(s *Server, question string, history []chatMessage) (strin
 	// Build context for LLM, centering snippets on the matched keywords.
 	snippetKWs := query.SplitKeywordsForSnippet(searchQuery)
 	var sb strings.Builder
+
+	// Structured grounding first: session digests matching the question's keywords give
+	// the LLM pre-aggregated task/entity/lesson context, so answers about "what did I do
+	// on X" come out structured instead of being re-synthesized from raw memory fragments.
+	if views, err := s.store.SessionViewsMatchingKeywords(snippetKWs, 5); err == nil && len(views) > 0 {
+		sb.WriteString("\n=== 相关会话工作摘要(按 session 聚合的派生视图) ===")
+		for _, v := range views {
+			line := fmt.Sprintf("\n[%s] task: %s", v.LastSeen[:min(10, len(v.LastSeen))], v.Task)
+			if v.Entity != "" {
+				line += " | entity: " + v.Entity
+				if v.Facet != "" {
+					line += " / " + v.Facet
+				}
+			}
+			sb.WriteString(line)
+			sb.WriteString("\n" + v.Summary)
+			var lessons []string
+			if json.Unmarshal([]byte(v.Lessons), &lessons) == nil {
+				for _, l := range lessons {
+					sb.WriteString("\n  ⚑ " + l)
+				}
+			}
+			sb.WriteString("\n")
+		}
+	}
+
 	for i, m := range combined {
 		c := m.Content
 		if len(c) > 300 {
@@ -649,9 +675,10 @@ func runAskWorkflowMCP(s *Server, question string, history []chatMessage) (strin
 		sb.WriteString(fmt.Sprintf("\n[%d] DATE: %s | %s", i+1, dateStr, c))
 	}
 
-	prompt := fmt.Sprintf(`Answer based on these memories. If not enough info, say so.
+	prompt := fmt.Sprintf(`Answer based on this context. If not enough info, say so.
+Session digests (aggregated per work session, with reusable lessons) come first; raw memory fragments follow. Prefer grounding in the digests for "what did I do / what was learned" questions.
 
-Memories:
+Context:
 %s
 
 Question: %s

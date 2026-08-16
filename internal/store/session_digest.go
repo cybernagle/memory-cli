@@ -2,6 +2,7 @@ package store
 
 import (
 	"database/sql"
+	"strings"
 	"time"
 )
 
@@ -186,4 +187,57 @@ func (s *SqliteStore) SessionViewCount() (int, error) {
 	var n int
 	err := s.db.QueryRow("SELECT COUNT(*) FROM session_views").Scan(&n)
 	return n, err
+}
+
+// SessionViewsMatchingKeywords returns digests whose entity, facet or task contains any
+// of the keywords (case-insensitive), newest activity first. Used by the ask pipelines to
+// ground answers in the structured session projection instead of only raw memories.
+func (s *SqliteStore) SessionViewsMatchingKeywords(keywords []string, limit int) ([]*SessionView, error) {
+	cleaned := make([]string, 0, len(keywords))
+	seen := map[string]bool{}
+	for _, kw := range keywords {
+		kw = strings.TrimSpace(kw)
+		if kw == "" || len([]rune(kw)) < 2 || seen[kw] {
+			continue
+		}
+		seen[kw] = true
+		cleaned = append(cleaned, kw)
+	}
+	if len(cleaned) == 0 {
+		return nil, nil
+	}
+	if limit <= 0 {
+		limit = 5
+	}
+	var sb strings.Builder
+	sb.WriteString(`SELECT session_id, project, tmux_session, first_seen, last_seen, memory_count,
+		task, entity, facet, summary, lessons, model, updated_at FROM session_views WHERE `)
+	args := make([]any, 0, len(cleaned)+1)
+	for i, kw := range cleaned {
+		if i > 0 {
+			sb.WriteString(" OR ")
+		}
+		sb.WriteString("(entity LIKE ? OR facet LIKE ? OR task LIKE ?)")
+		pat := "%" + kw + "%"
+		args = append(args, pat, pat, pat)
+	}
+	sb.WriteString(" ORDER BY last_seen DESC LIMIT ?")
+	args = append(args, limit)
+
+	rows, err := s.db.Query(sb.String(), args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*SessionView
+	for rows.Next() {
+		v := &SessionView{}
+		if err := rows.Scan(&v.SessionID, &v.Project, &v.TmuxSession, &v.FirstSeen, &v.LastSeen,
+			&v.MemoryCount, &v.Task, &v.Entity, &v.Facet, &v.Summary, &v.Lessons,
+			&v.Model, &v.UpdatedAt); err != nil {
+			continue
+		}
+		out = append(out, v)
+	}
+	return out, nil
 }
