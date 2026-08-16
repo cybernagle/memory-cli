@@ -235,6 +235,34 @@ func toolDefinitions() []map[string]any {
 			},
 		},
 		{
+			"name":        "memory_state_get",
+			"description": "Read a project's shared working state (version, branch/commit, phase, blockers, next actions) written by the previous agent session. Without a project, lists all projects. Stale entries (>24h or written by another session) MUST be verified against git before acting on them.",
+			"inputSchema": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"project": map[string]any{"type": "string", "description": "Project name; omit to list all"},
+				},
+			},
+		},
+		{
+			"name":        "memory_state_set",
+			"description": "Report the project's current working state for the next agent session (write at milestones and session end). Precise program-written data — git stays the authority for code; only pointers + semantics git can't express (blockers, next actions, intent).",
+			"inputSchema": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"project":  map[string]any{"type": "string"},
+					"version":  map[string]any{"type": "string"},
+					"branch":   map[string]any{"type": "string"},
+					"commit":   map[string]any{"type": "string", "description": "HEAD commit hash"},
+					"phase":    map[string]any{"type": "string", "description": "e.g. 开发/测试/部署/验收"},
+					"blockers": map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+					"next_actions": map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+					"notes":    map[string]any{"type": "string", "description": "Free text for the next agent"},
+				},
+				"required": []string{"project"},
+			},
+		},
+		{
 			"name":        "memory_sessions",
 			"description": "List per-session work digests: what task each session performed, the entity/facet it revolved around (e.g. 瑞福莱/cases, memory-cli/infra), a summary, and reusable lessons. Use to answer 'what did I/we do before on X'.",
 			"inputSchema": map[string]any{
@@ -278,6 +306,10 @@ func (s *Server) handleToolsCall(id any, params map[string]any) {
 		result, err = s.toolRemind(args)
 	case "memory_sessions":
 		result, err = s.toolSessions(args)
+	case "memory_state_get":
+		result, err = s.toolStateGet(args)
+	case "memory_state_set":
+		result, err = s.toolStateSet(args)
 	default:
 		s.writeError(id, -32601, "Unknown tool: "+name)
 		return
@@ -759,4 +791,84 @@ func (s *Server) toolSessions(args map[string]any) (string, error) {
 		sb.WriteString("\n")
 	}
 	return sb.String(), nil
+}
+
+
+// toolStateGet reads the shared project state. No project → compact list of all.
+func (s *Server) toolStateGet(args map[string]any) (string, error) {
+	project, _ := args["project"].(string)
+	if strings.TrimSpace(project) == "" {
+		states, err := s.store.ListProjectStates()
+		if err != nil {
+			return "", err
+		}
+		if len(states) == 0 {
+			return "No project states recorded yet.", nil
+		}
+		var sb strings.Builder
+		sb.WriteString(fmt.Sprintf("%d projects:\n\n", len(states)))
+		for i, ps := range states {
+			stale := ""
+			if ps.Stale {
+				stale = " ⚠️STALE(先 git 核实)"
+			}
+			sb.WriteString(fmt.Sprintf("[%d] %s — %s @ %s(%s) · %s · %.1fh ago by %s%s\n",
+				i+1, ps.Project, defaultOf(ps.Version, "-"), defaultOf(ps.Branch, "-"),
+				ps.CommitShort(), defaultOf(ps.Phase, "-"), ps.AgeHours, defaultOf(ps.UpdatedBy, "?"), stale))
+			if len(ps.NextActions) > 0 {
+				sb.WriteString("    next: " + strings.Join(ps.NextActions, " / ") + "\n")
+			}
+			if len(ps.Blockers) > 0 {
+				sb.WriteString("    blockers: " + strings.Join(ps.Blockers, " / ") + "\n")
+			}
+		}
+		return sb.String(), nil
+	}
+	ps, err := s.store.GetProjectState(project)
+	if err != nil {
+		return "", err
+	}
+	data, _ := json.Marshal(ps)
+	staleNote := ""
+	if ps.Stale {
+		staleNote = "\n⚠️ STALE: 超过 24h 未更新,动工前先用 git 核实 commit/branch。"
+	}
+	return string(data) + staleNote, nil
+}
+
+// toolStateSet reports the project state for the next agent session.
+func (s *Server) toolStateSet(args map[string]any) (string, error) {
+	str := func(k string) string { v, _ := args[k].(string); return v }
+	list := func(k string) []string {
+		raw, ok := args[k].([]any)
+		if !ok {
+			return nil
+		}
+		out := make([]string, 0, len(raw))
+		for _, v := range raw {
+			if sv, ok := v.(string); ok {
+				out = append(out, sv)
+			}
+		}
+		return out
+	}
+	ps, err := s.store.SetProjectState(store.StateInput{
+		Project: str("project"), Version: str("version"), Branch: str("branch"),
+		Commit: str("commit"), Phase: str("phase"),
+		Blockers: list("blockers"), NextActions: list("next_actions"),
+		Notes: str("notes"),
+		UpdatedBy: "mcp/" + defaultOf(str("session"), "anon"), SessionID: str("session"),
+	})
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("✓ state recorded: %s %s @ %s(%s) · %s\nblockers=%d next=%d\n(下一个 session 开局即读;state.md 已刷新)",
+		ps.Project, ps.Version, ps.Branch, ps.CommitShort(), ps.Phase, len(ps.Blockers), len(ps.NextActions)), nil
+}
+
+func defaultOf(v, def string) string {
+	if v == "" {
+		return def
+	}
+	return v
 }

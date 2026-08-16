@@ -28,6 +28,7 @@ func NewServer(s Store, llmClient *llm.Client) *Server {
 	mux.HandleFunc("GET /api/stats", srv.handleStats)
 	mux.HandleFunc("GET /api/event-stats", srv.handleEventStats)
 	mux.HandleFunc("GET /api/sessions", srv.handleSessions)
+	mux.HandleFunc("GET /api/state", srv.handleState)
 	mux.HandleFunc("GET /api/heatmap", srv.handleHeatmap)
 	mux.HandleFunc("GET /api/memories/{id}/links", srv.handleLinks)
 	mux.HandleFunc("GET /api/memories/{id}", srv.handleMemoryDetail)

@@ -429,6 +429,10 @@ a:hover { text-decoration: underline; }
       </div>
     </div>
     <div class="card">
+      <h2>Project States · 共享状态 <span style="font-size:11px;font-weight:normal;color:var(--text2)">(agent 交接)</span></h2>
+      <div id="stateList" style="font-size:13px"><span style="color:var(--text2)">loading…</span></div>
+    </div>
+    <div class="card">
       <h2>Projects</h2>
       <div style="position:relative;height:220px">
         <canvas id="projectChart"></canvas>
@@ -1888,6 +1892,28 @@ async function loadEventStats() {
 
 loadStats().catch(showErrorState);
 loadEventStats().catch(showErrorState);
+loadStateCard().catch(function(){});
+
+async function loadStateCard() {
+  var el = document.getElementById('stateList');
+  if (!el) return;
+  try {
+    var d = await fetchJSON('/api/state');
+    var st = d.states || [];
+    if (!st.length) { el.innerHTML = '<span style="color:var(--text2)">暂无状态。agent 用 memory_state_set 写入。</span>'; return; }
+    el.innerHTML = st.map(function(ps) {
+      var flag = ps.stale ? ' <span style="color:#B3382A">⚠️STALE</span>' : '';
+      var head = '<div style="display:flex;justify-content:space-between;gap:8px;margin:6px 0">' +
+        '<b>' + esc(ps.project) + '</b>' +
+        '<span style="color:var(--text2)">' + esc(ps.version || '') + ' @ ' + esc(ps.branch || '') +
+        (ps.commit ? '(' + esc(ps.commit.slice(0,7)) + ')' : '') + ' · ' + esc(ps.phase || '') + flag + '</span></div>';
+      var body = '';
+      if ((ps.next_actions || []).length) body += '<div style="color:var(--text2)">next: ' + esc(ps.next_actions.join(' / ')) + '</div>';
+      if ((ps.blockers || []).length) body += '<div style="color:var(--text2)">blockers: ' + esc(ps.blockers.join(' / ')) + '</div>';
+      return head + body;
+    }).join('');
+  } catch(e) { el.innerHTML = ''; }
+}
 loadMemories().catch(showErrorState);
 
 // ─── Entity Graph (vis-network) ───

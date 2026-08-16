@@ -1049,3 +1049,31 @@ func (srv *Server) sqliteSessionViews(f store.SessionViewFilter) ([]*store.Sessi
 	}
 	return nil, nil
 }
+
+
+// handleState serves the shared per-project working state (project_states projection).
+func (srv *Server) handleState(w http.ResponseWriter, r *http.Request) {
+	sqlStore, ok := srv.store.impl.(*store.SqliteStore)
+	if !ok {
+		writeJSON(w, http.StatusOK, map[string]any{"states": []*store.ProjectState{}})
+		return
+	}
+	if project := r.URL.Query().Get("project"); project != "" {
+		ps, err := sqlStore.GetProjectState(project)
+		if err != nil {
+			writeError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, ps)
+		return
+	}
+	states, err := sqlStore.ListProjectStates()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if states == nil {
+		states = []*store.ProjectState{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"count": len(states), "states": states})
+}

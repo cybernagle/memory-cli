@@ -2,6 +2,7 @@ package store
 
 import (
 	"database/sql"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -1199,5 +1200,58 @@ func TestSessionViewUpsertAndFilter(t *testing.T) {
 	}
 	if v, _ := s.ListSessionViews(SessionViewFilter{Project: "juli"}); len(v) != 1 || v[0].SessionID != "s2" {
 		t.Errorf("project filter: %+v", v)
+	}
+}
+
+// TestProjectStateSetGetStale: the shared-state projection — upsert, history append,
+// staleness computed at read time, and the state.md bootstrap file.
+func TestProjectStateSetGetStale(t *testing.T) {
+	s := tempSqliteStore(t)
+
+	ps, err := s.SetProjectState(StateInput{
+		Project: "ruifulai", Version: "v26", Branch: "main", Commit: "a1b2c3d4e5f6",
+		Phase: "开发", Blockers: []string{"图钉回归未跑", " ", "客户确认"}, NextActions: []string{"锚点收尾"},
+		Notes: "给下一个 agent:先跑回归", UpdatedBy: "zcode/sess-a",
+	})
+	if err != nil {
+		t.Fatalf("set: %v", err)
+	}
+	if len(ps.Blockers) != 2 || ps.Stale {
+		t.Errorf("normalize/stale wrong: %+v", ps)
+	}
+
+	got, err := s.GetProjectState("ruifulai")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.CommitShort() != "a1b2c3d" || got.Notes != "给下一个 agent:先跑回归" {
+		t.Errorf("roundtrip wrong: %+v", got)
+	}
+	if got.Stale || got.AgeHours > 1 {
+		t.Errorf("fresh state flagged stale: %+v", got)
+	}
+
+	// Re-set replaces wholesale (LWW handoff) and appends history.
+	if _, err := s.SetProjectState(StateInput{Project: "ruifulai", Version: "v27", Commit: "fff000"}); err != nil {
+		t.Fatalf("re-set: %v", err)
+	}
+	got, _ = s.GetProjectState("ruifulai")
+	if got.Version != "v27" || got.Notes != "" {
+		t.Errorf("LWW replace wrong: %+v", got)
+	}
+	hist, _ := s.StateHistory("ruifulai", 10)
+	if len(hist) != 2 || hist[0].Version != "v27" {
+		t.Errorf("history wrong: %d entries", len(hist))
+	}
+
+	// Validation gate.
+	if _, err := s.SetProjectState(StateInput{Project: "  "}); err == nil {
+		t.Error("empty project accepted")
+	}
+
+	// state.md bootstrap file lands next to the DB.
+	md, err := os.ReadFile(s.stateMarkdownPath())
+	if err != nil || !strings.Contains(string(md), "ruifulai") || !strings.Contains(string(md), "v27") {
+		t.Errorf("state.md wrong: %v %q", err, string(md)[:min(80, len(string(md)))])
 	}
 }

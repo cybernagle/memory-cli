@@ -19,6 +19,7 @@ import (
 
 type SqliteStore struct {
 	db             *sql.DB
+	dbPath         string // remembered so state.md can live next to the DB
 	searchStrategy string // "idf"(default) | "bm25" | "hybrid"
 }
 
@@ -30,7 +31,7 @@ func NewSqliteStore(dbPath string) (*SqliteStore, error) {
 		return nil, fmt.Errorf("open sqlite: %w", err)
 	}
 	db.SetMaxOpenConns(1)
-	s := &SqliteStore{db: db}
+	s := &SqliteStore{db: db, dbPath: dbPath}
 	if err := s.init(); err != nil {
 		db.Close()
 		return nil, err

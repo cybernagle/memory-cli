@@ -99,6 +99,34 @@ CREATE TABLE IF NOT EXISTS reminders (
 CREATE INDEX IF NOT EXISTS idx_reminders_trigger ON reminders(trigger_at);
 CREATE INDEX IF NOT EXISTS idx_reminders_status ON reminders(status);
 
+
+-- project_states: the shared working-state projection (CQRS read model #3). One row per
+-- project, UPSERT on every agent handoff write — precise, program-written, LLM-free.
+-- Only git pointers + semantics git cannot express (version intent, blockers, next
+-- actions). project_state_history is the append-only log of every state change (audit).
+CREATE TABLE IF NOT EXISTS project_states (
+    project      TEXT PRIMARY KEY,
+    version      TEXT NOT NULL DEFAULT '',
+    branch       TEXT NOT NULL DEFAULT '',
+    commit_hash  TEXT NOT NULL DEFAULT '',
+    phase        TEXT NOT NULL DEFAULT '',
+    blockers     TEXT NOT NULL DEFAULT '[]',
+    next_actions TEXT NOT NULL DEFAULT '[]',
+    notes        TEXT NOT NULL DEFAULT '',
+    updated_at   TEXT NOT NULL,
+    updated_by   TEXT NOT NULL DEFAULT '',
+    session_id   TEXT NOT NULL DEFAULT ''
+);
+
+CREATE TABLE IF NOT EXISTS project_state_history (
+    seq       INTEGER PRIMARY KEY AUTOINCREMENT,
+    project   TEXT NOT NULL,
+    state     TEXT NOT NULL,
+    changed_at TEXT NOT NULL,
+    changed_by TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_psh_project ON project_state_history(project);
+
 -- session_views: the per-session projection of the event log (CQRS read model #2).
 -- One row per session_id, (re)built by the daemon's SessionDigestTask: what task the
 -- session performed, which entity+facet it revolved around, a summary, and extracted
