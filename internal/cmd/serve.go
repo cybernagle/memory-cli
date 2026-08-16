@@ -117,6 +117,9 @@ var serveCmd = &cobra.Command{
 				d.AddTask(&daemon.EnrichTagsTask{Store: sqliteStore, LLM: llmClient})
 				d.AddTask(&daemon.ProfileTask{Store: sqliteStore, LLM: llmClient})
 				d.AddTask(&daemon.EntityExtractionTask{Store: sqliteStore, LLM: llmClient})
+				// SessionDigestTask builds the per-session task/experience projection
+				// (session_views) — the CQRS read model over "what did each session do".
+				d.AddTask(&daemon.SessionDigestTask{Store: sqliteStore, LLM: llmClient})
 				// EvidenceTask (RECONCILE P3 #18): sediment per-domain accept/reject signal onto
 				// preference memories. Runs after ProfileTask — fine-grained counterpart to the
 				// global character profile it writes. Does not need the LLM.

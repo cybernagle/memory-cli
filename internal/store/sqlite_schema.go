@@ -99,6 +99,29 @@ CREATE TABLE IF NOT EXISTS reminders (
 CREATE INDEX IF NOT EXISTS idx_reminders_trigger ON reminders(trigger_at);
 CREATE INDEX IF NOT EXISTS idx_reminders_status ON reminders(status);
 
+-- session_views: the per-session projection of the event log (CQRS read model #2).
+-- One row per session_id, (re)built by the daemon's SessionDigestTask: what task the
+-- session performed, which entity+facet it revolved around, a summary, and extracted
+-- reusable lessons. LLM-derived (non-deterministic); rebuilt on demand, never the
+-- source of truth.
+CREATE TABLE IF NOT EXISTS session_views (
+    session_id   TEXT PRIMARY KEY,
+    project      TEXT NOT NULL DEFAULT '',
+    tmux_session TEXT NOT NULL DEFAULT '',
+    first_seen   TEXT NOT NULL DEFAULT '',
+    last_seen    TEXT NOT NULL DEFAULT '',
+    memory_count INTEGER NOT NULL DEFAULT 0,
+    task         TEXT NOT NULL DEFAULT '',
+    entity       TEXT NOT NULL DEFAULT '',
+    facet        TEXT NOT NULL DEFAULT '',
+    summary      TEXT NOT NULL DEFAULT '',
+    lessons      TEXT NOT NULL DEFAULT '[]',
+    model        TEXT NOT NULL DEFAULT '',
+    updated_at   TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_session_views_project ON session_views(project);
+CREATE INDEX IF NOT EXISTS idx_session_views_entity ON session_views(entity);
+
 CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
     memory_id UNINDEXED,
     content,

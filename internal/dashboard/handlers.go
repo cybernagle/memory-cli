@@ -1015,3 +1015,37 @@ func (srv *Server) handleEventStats(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, stats)
 }
+
+// handleSessions serves the per-session projection (session_views): task/entity/facet/
+// summary/lessons per session — the "what did I do" read model.
+func (srv *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	f := store.SessionViewFilter{Limit: 50}
+	if v := q.Get("session"); v != "" {
+		f.SessionID = v
+	}
+	if v := q.Get("project"); v != "" {
+		f.Project = v
+	}
+	if v := q.Get("entity"); v != "" {
+		f.Entity = v
+	}
+	views, err := srv.sqliteSessionViews(f)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if views == nil {
+		views = []*store.SessionView{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"count": len(views), "sessions": views})
+}
+
+// sqliteSessionViews resolves session views when the backing store is SQLite (the
+// session_views projection is SQLite-only; FileStore returns no sessions).
+func (srv *Server) sqliteSessionViews(f store.SessionViewFilter) ([]*store.SessionView, error) {
+	if sqlStore, ok := srv.store.impl.(*store.SqliteStore); ok {
+		return sqlStore.ListSessionViews(f)
+	}
+	return nil, nil
+}

@@ -234,6 +234,19 @@ func toolDefinitions() []map[string]any {
 				"required": []string{"content", "when"},
 			},
 		},
+		{
+			"name":        "memory_sessions",
+			"description": "List per-session work digests: what task each session performed, the entity/facet it revolved around (e.g. 瑞福莱/cases, memory-cli/infra), a summary, and reusable lessons. Use to answer 'what did I/we do before on X'.",
+			"inputSchema": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"project": map[string]any{"type": "string", "description": "Filter by project"},
+					"entity":  map[string]any{"type": "string", "description": "Filter by entity, substring match (瑞福莱, marco, juli...)"},
+					"session": map[string]any{"type": "string", "description": "One session by id"},
+					"limit":   map[string]any{"type": "integer", "description": "Default 10"},
+				},
+			},
+		},
 	}
 }
 
@@ -263,6 +276,8 @@ func (s *Server) handleToolsCall(id any, params map[string]any) {
 		result, err = s.toolList(args)
 	case "memory_remind":
 		result, err = s.toolRemind(args)
+	case "memory_sessions":
+		result, err = s.toolSessions(args)
 	default:
 		s.writeError(id, -32601, "Unknown tool: "+name)
 		return
@@ -671,3 +686,50 @@ type chatMessage struct {
 	Content string `json:"content"`
 }
 var _ = log.Printf
+
+// toolSessions serves the per-session work digest projection (session_views): task,
+// entity/facet, summary, lessons — the "what did I do before on X" read model.
+func (s *Server) toolSessions(args map[string]any) (string, error) {
+	f := store.SessionViewFilter{Limit: 10}
+	if v, ok := args["project"].(string); ok {
+		f.Project = v
+	}
+	if v, ok := args["entity"].(string); ok {
+		f.Entity = v
+	}
+	if v, ok := args["session"].(string); ok {
+		f.SessionID = v
+	}
+	if v, ok := args["limit"].(float64); ok && int(v) > 0 {
+		f.Limit = int(v)
+	}
+	views, err := s.store.ListSessionViews(f)
+	if err != nil {
+		return "", err
+	}
+	if len(views) == 0 {
+		return "No session digests yet (filters may be too narrow, or run `memory sessions --build N`).", nil
+	}
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("%d sessions:\n\n", len(views)))
+	for i, v := range views {
+		sb.WriteString(fmt.Sprintf("[%d] %s | project=%s | %d memories\n", i+1, v.LastSeen, v.Project, v.MemoryCount))
+		sb.WriteString("    task: " + v.Task + "\n")
+		if v.Entity != "" {
+			line := "    entity: " + v.Entity
+			if v.Facet != "" {
+				line += " / " + v.Facet
+			}
+			sb.WriteString(line + "\n")
+		}
+		sb.WriteString("    " + v.Summary + "\n")
+		var lessons []string
+		if json.Unmarshal([]byte(v.Lessons), &lessons) == nil {
+			for _, l := range lessons {
+				sb.WriteString("    ⚑ " + l + "\n")
+			}
+		}
+		sb.WriteString("\n")
+	}
+	return sb.String(), nil
+}

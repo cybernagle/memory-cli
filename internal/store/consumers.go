@@ -22,6 +22,10 @@ const (
 	// project names, tech terms) and populates the entity/entity_mentions tables. This is
 	// NOT limited to [[wiki-links]] — it uses LLM to find entities in any text.
 	ConsumerEntityExtract // "entity-extract"
+	// ConsumerSessionDigest aggregates memories per session_id into the session_views
+	// projection (task/entity/facet/summary/lessons). Marks memories it already fed into
+	// a digest so the task only re-digests sessions with new material.
+	ConsumerSessionDigest // "session-digest"
 )
 
 // consumerByName maps the string names used at the Store interface / pipeline boundary
@@ -32,6 +36,7 @@ var consumerByName = map[string]Consumer{
 	"enrich-tags":      ConsumerEnrichTags,
 	"process-cmd":      ConsumerProcessCmd,
 	"entity-extract":   ConsumerEntityExtract,
+	"session-digest":   ConsumerSessionDigest,
 }
 
 // ConsumerByName resolves a consumer's string name to its bitmask.

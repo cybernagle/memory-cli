@@ -1134,3 +1134,70 @@ func TestRawEntryIDTraceability(t *testing.T) {
 		t.Error("RawEntryID does not resolve to an event in the log")
 	}
 }
+
+// TestSessionsWithUnconsumed: the session-digest backlog groups by session_id and
+// disappears once the consumer bit is marked.
+func TestSessionsWithUnconsumed(t *testing.T) {
+	s := tempSqliteStore(t)
+
+	s.IngestMemory(&Memory{Content: "sess-a 第一条", Phase: PhaseInbox, SessionID: "sess-a", Project: "pa"})
+	s.IngestMemory(&Memory{Content: "sess-a 第二条", Phase: PhaseInbox, SessionID: "sess-a", Project: "pa"})
+	s.IngestMemory(&Memory{Content: "sess-b 唯一", Phase: PhaseInbox, SessionID: "sess-b", Project: "pb"})
+	s.IngestMemory(&Memory{Content: "无会话写入", Phase: PhaseInbox, SessionID: ""})
+
+	refs, err := s.SessionsWithUnconsumed("session-digest", 10)
+	if err != nil {
+		t.Fatalf("SessionsWithUnconsumed: %v", err)
+	}
+	if len(refs) != 2 {
+		t.Fatalf("sessions = %d, want 2 (no-session writes excluded)", len(refs))
+	}
+	if refs[0].SessionID != "sess-a" || refs[0].UnconsumedCount != 2 || refs[0].Project != "pa" {
+		t.Errorf("first ref wrong: %+v", refs[0])
+	}
+
+	// Mark consumed → no longer pending.
+	for _, m := range mustListBySession(t, s, "sess-a") {
+		s.MarkConsumed(m.ID, "session-digest")
+	}
+	refs, _ = s.SessionsWithUnconsumed("session-digest", 10)
+	if len(refs) != 1 || refs[0].SessionID != "sess-b" {
+		t.Errorf("after marking sess-a: %+v", refs)
+	}
+}
+
+func mustListBySession(t *testing.T, s *SqliteStore, sid string) []*Memory {
+	t.Helper()
+	memories, err := s.ListMemoriesBySession(sid, 0)
+	if err != nil {
+		t.Fatalf("ListMemoriesBySession: %v", err)
+	}
+	return memories
+}
+
+// TestSessionViewUpsertAndFilter: digests upsert per session and filter by project/entity.
+func TestSessionViewUpsertAndFilter(t *testing.T) {
+	s := tempSqliteStore(t)
+
+	v1 := &SessionView{SessionID: "s1", Project: "zcode", Entity: "瑞福莱", Facet: "cases",
+		Task: "优化 Cases 页", Summary: "完成了重构", Lessons: `["ICP备案要先查主体"]`, MemoryCount: 5}
+	if err := s.UpsertSessionView(v1); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	// Re-digest replaces the row wholesale.
+	v2 := &SessionView{SessionID: "s1", Project: "zcode", Entity: "瑞福莱", Facet: "product",
+		Task: "继续产品页", Summary: "更新完成", MemoryCount: 8}
+	s.UpsertSessionView(v2)
+	s.UpsertSessionView(&SessionView{SessionID: "s2", Project: "juli", Entity: "juli", Task: "数据流优化", Summary: "完成"})
+
+	got, _ := s.ListSessionViews(SessionViewFilter{})
+	if len(got) != 2 || got[0].MemoryCount != 8 || got[0].Facet != "product" {
+		t.Errorf("upsert semantics wrong: %+v", got)
+	}
+	if v, _ := s.ListSessionViews(SessionViewFilter{Entity: "瑞福莱"}); len(v) != 1 || v[0].SessionID != "s1" {
+		t.Errorf("entity filter: %+v", v)
+	}
+	if v, _ := s.ListSessionViews(SessionViewFilter{Project: "juli"}); len(v) != 1 || v[0].SessionID != "s2" {
+		t.Errorf("project filter: %+v", v)
+	}
+}
