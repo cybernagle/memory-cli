@@ -259,3 +259,90 @@ func (ps *ProjectState) CommitShort() string {
 	}
 	return ps.Commit
 }
+
+// ─── Coverage check ───
+//
+// The state contract ("write at session end") has no enforcement — an agent can work for
+// hours and never call memory_state_set, leaving a stale-but-fresh-looking state (or no
+// state at all). CoverageGaps crosses session_views (what sessions actually did, with
+// LLM-extracted entity labels) against project_states timestamps and reports every
+// project whose sessions outran its last state write. Gaps are facts, not accusations:
+// the recovery action is evidence-based re-reporting (as done 2026-08-17 for ruifulai).
+
+// projectAliases maps entity keywords appearing in session digests to state projects.
+// Deliberately a small hand-curated list — auto-mapping entity→project is a rabbit hole;
+// extend as projects are added.
+var projectAliases = map[string][]string{
+	"ruifulai":   {"瑞福莱", "reflex", "ruifulai"},
+	"memory-cli": {"memory-cli", "memory cli"},
+	"makro":      {"marco", "makro"},
+	"juli":       {"juli"},
+}
+
+// CoverageGap is one detected "sessions worked, state didn't follow" instance.
+type CoverageGap struct {
+	Project    string  `json:"project"`
+	LastState  string  `json:"last_state"` // state updated_at, "" when no state exists
+	LastWork   string  `json:"last_work"`  // newest matching session's last_seen
+	DeltaHours float64 `json:"delta_hours"`
+	TaskHead   string  `json:"task_head"` // newest session's task (what the work was)
+}
+
+// CoverageGaps reports projects where a recent session (last 14 days) revolved around
+// them but the shared state is older than that session's end — i.e. the state misses
+// the latest work.
+func (s *SqliteStore) CoverageGaps() ([]*CoverageGap, error) {
+	states, err := s.ListProjectStates()
+	if err != nil {
+		return nil, err
+	}
+	stateAt := map[string]string{}
+	for _, ps := range states {
+		stateAt[ps.Project] = ps.UpdatedAt
+	}
+
+	views, err := s.ListSessionViews(SessionViewFilter{Limit: 300})
+	if err != nil {
+		return nil, err
+	}
+
+	best := map[string]*CoverageGap{}
+	for _, v := range views {
+		for project, aliases := range projectAliases {
+			if !containsAny(v.Entity, aliases) && !containsAny(v.Task, aliases) {
+				continue
+			}
+			workAt, err := time.Parse(time.RFC3339, v.LastSeen)
+			if err != nil || time.Since(workAt) > 14*24*time.Hour {
+				continue
+			}
+			st := stateAt[project]
+			stateT, _ := time.Parse(time.RFC3339, st)
+			if st == "" || workAt.After(stateT) {
+				delta := workAt.Sub(stateT).Hours()
+				if st == "" {
+					delta = time.Since(workAt).Hours()
+				}
+				if g, ok := best[project]; !ok || delta > g.DeltaHours {
+					best[project] = &CoverageGap{Project: project, LastState: st,
+						LastWork: v.LastSeen, DeltaHours: delta, TaskHead: v.Task}
+				}
+			}
+		}
+	}
+	out := make([]*CoverageGap, 0, len(best))
+	for _, g := range best {
+		out = append(out, g)
+	}
+	return out, nil
+}
+
+func containsAny(s string, subs []string) bool {
+	l := strings.ToLower(s)
+	for _, sub := range subs {
+		if strings.Contains(l, strings.ToLower(sub)) {
+			return true
+		}
+	}
+	return false
+}

@@ -1331,3 +1331,49 @@ func TestRebuildSkipsNoiseEvents(t *testing.T) {
 		t.Errorf("events = %d, want 3 (log must keep noise as history)", n)
 	}
 }
+
+// TestCoverageGaps: sessions that outran a project's state write (or projects with no
+// state at all) are detected — the "write at session end" contract gets an audit.
+func TestCoverageGaps(t *testing.T) {
+	s := tempSqliteStore(t)
+
+	// Session on ruifulai, but state older than the session → gap.
+	s.IngestMemory(&Memory{Content: "瑞福莱锚点系统工作", Phase: PhaseInbox, SessionID: "s-rf"})
+	s.db.Exec(`INSERT INTO session_views (session_id, project, first_seen, last_seen, memory_count, task, entity, updated_at)
+		VALUES ('s-rf', 'zcode', '2026-08-10T00:00:00Z', ?, 1, '瑞福莱锚点系统收尾', '瑞福莱 / infra', ?)`,
+		time.Now().Format(time.RFC3339), time.Now().Format(time.RFC3339))
+	s.SetProjectState(StateInput{Project: "ruifulai", Version: "v0"})
+
+	// A newer session AFTER the state write → gap fires.
+	s.db.Exec(`INSERT INTO session_views (session_id, project, first_seen, last_seen, memory_count, task, entity, updated_at)
+		VALUES ('s-rf2', 'zcode', '2026-08-10T00:00:00Z', ?, 1, '继续瑞福莱优化', '瑞福莱', ?)`,
+		time.Now().Add(time.Hour).Format(time.RFC3339), time.Now().Add(time.Hour).Format(time.RFC3339))
+
+	// juli session, no state row at all → gap with LastState == "".
+	s.db.Exec(`INSERT INTO session_views (session_id, project, first_seen, last_seen, memory_count, task, entity, updated_at)
+		VALUES ('s-juli', 'zcode', '2026-08-10T00:00:00Z', ?, 1, 'juli 数据流', 'juli', ?)`,
+		time.Now().Format(time.RFC3339), time.Now().Format(time.RFC3339))
+
+	// Unrelated session → no gap.
+	s.db.Exec(`INSERT INTO session_views (session_id, project, first_seen, last_seen, memory_count, task, entity, updated_at)
+		VALUES ('s-x', 'zcode', '2026-08-10T00:00:00Z', ?, 1, '别的项目', '别的项目', ?)`,
+		time.Now().Format(time.RFC3339), time.Now().Format(time.RFC3339))
+
+	gaps, err := s.CoverageGaps()
+	if err != nil {
+		t.Fatalf("CoverageGaps: %v", err)
+	}
+	byProject := map[string]*CoverageGap{}
+	for _, g := range gaps {
+		byProject[g.Project] = g
+	}
+	if _, ok := byProject["ruifulai"]; !ok {
+		t.Errorf("ruifulai gap missing: %+v", gaps)
+	}
+	if g, ok := byProject["juli"]; !ok || g.LastState != "" {
+		t.Errorf("juli no-state gap missing: %+v", gaps)
+	}
+	if _, ok := byProject["别的项目"]; ok {
+		t.Error("unrelated project falsely flagged")
+	}
+}

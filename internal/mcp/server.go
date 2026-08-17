@@ -820,6 +820,17 @@ func (s *Server) toolStateGet(args map[string]any) (string, error) {
 			return "No project states recorded yet.", nil
 		}
 		var sb strings.Builder
+		if gaps, err := s.store.CoverageGaps(); err == nil && len(gaps) > 0 {
+			sb.WriteString("⚠️ Coverage gaps(会话有进展但状态未上报,接手前先核实):\n")
+			for _, g := range gaps {
+				if g.LastState == "" {
+					sb.WriteString(fmt.Sprintf("  - %s:无状态记录;最近工作 %.0fh 前 — %s\n", g.Project, g.DeltaHours, g.TaskHead))
+				} else {
+					sb.WriteString(fmt.Sprintf("  - %s:状态落后最近会话 %.0fh — %s\n", g.Project, g.DeltaHours, g.TaskHead))
+				}
+			}
+			sb.WriteString("\n")
+		}
 		sb.WriteString(fmt.Sprintf("%d projects:\n\n", len(states)))
 		for i, ps := range states {
 			stale := ""

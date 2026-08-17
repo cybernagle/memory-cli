@@ -45,6 +45,17 @@ never trust a STALE entry without verifying against git.`,
 		defer s.Close()
 
 		if len(args) == 0 {
+			if gaps, err := s.CoverageGaps(); err == nil && len(gaps) > 0 {
+				fmt.Println("⚠️  Coverage gaps(会话有进展但状态未上报):")
+				for _, g := range gaps {
+					if g.LastState == "" {
+						fmt.Printf("    %s — 无状态记录;最近工作 %.0fh 前:%s\n", g.Project, g.DeltaHours, orDash(g.TaskHead))
+					} else {
+						fmt.Printf("    %s — 状态落后最近会话 %.0fh;最近工作:%s\n", g.Project, g.DeltaHours, orDash(g.TaskHead))
+					}
+				}
+				fmt.Println()
+			}
 			states, err := s.ListProjectStates()
 			if err != nil {
 				return err
