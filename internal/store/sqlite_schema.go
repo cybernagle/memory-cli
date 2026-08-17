@@ -100,6 +100,21 @@ CREATE INDEX IF NOT EXISTS idx_reminders_trigger ON reminders(trigger_at);
 CREATE INDEX IF NOT EXISTS idx_reminders_status ON reminders(status);
 
 
+
+-- graduations: the queue where work-context facts wait to be archived into their
+-- business system of record (e.g. the project's PocketBase). memory never duplicates
+-- business data — facts graduate OUT of memory with a pointer back.
+CREATE TABLE IF NOT EXISTS graduations (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    project     TEXT NOT NULL,
+    fact        TEXT NOT NULL,
+    session_id  TEXT NOT NULL DEFAULT '',
+    created_at  TEXT NOT NULL,
+    archived_at TEXT,
+    pb_pointer  TEXT NOT NULL DEFAULT ''   -- e.g. pb://ruifulai/feedback/rec123
+);
+CREATE INDEX IF NOT EXISTS idx_graduations_pending ON graduations(archived_at);
+
 -- project_states: the shared working-state projection (CQRS read model #3). One row per
 -- project, UPSERT on every agent handoff write — precise, program-written, LLM-free.
 -- Only git pointers + semantics git cannot express (version intent, blockers, next

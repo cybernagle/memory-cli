@@ -1255,3 +1255,47 @@ func TestProjectStateSetGetStale(t *testing.T) {
 		t.Errorf("state.md wrong: %v %q", err, string(md)[:min(80, len(string(md)))])
 	}
 }
+
+// TestGraduationQueue: business facts enqueue, surface in state.md, and archive with a
+// pointer (memory never duplicates business data).
+func TestGraduationQueue(t *testing.T) {
+	s := tempSqliteStore(t)
+
+	g1, err := s.AddGraduation("ruifulai", "客户确认 v26 验收通过", "sess-A")
+	if err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	s.AddGraduation("ruifulai", "  ", "sess-A") // invalid: empty fact
+	if grads, _ := s.ListGraduations(true); len(grads) != 1 {
+		t.Fatalf("pending = %d, want 1 (empty fact rejected)", len(grads))
+	}
+
+	// state.md surfaces the queue at session start.
+	s.SetProjectState(StateInput{Project: "ruifulai", Version: "v26"})
+	md, _ := os.ReadFile(s.stateMarkdownPath())
+	if !strings.Contains(string(md), "客户确认 v26") {
+		t.Error("state.md missing pending graduation")
+	}
+
+	// Archiving requires a pointer and drains the queue.
+	if err := s.CompleteGraduation(g1.ID, ""); err == nil {
+		t.Error("archive without pointer accepted")
+	}
+	if err := s.CompleteGraduation(g1.ID, "pb://ruifulai/feedback/rec123"); err != nil {
+		t.Fatalf("complete: %v", err)
+	}
+	if err := s.CompleteGraduation(g1.ID, "pb://again"); err == nil {
+		t.Error("double archive accepted")
+	}
+	if grads, _ := s.ListGraduations(true); len(grads) != 0 {
+		t.Errorf("pending after archive = %d, want 0", len(grads))
+	}
+	all, _ := s.ListGraduations(false)
+	if len(all) != 1 || all[0].PBPointer != "pb://ruifulai/feedback/rec123" {
+		t.Errorf("archived entry lost pointer: %+v", all)
+	}
+	md, _ = os.ReadFile(s.stateMarkdownPath())
+	if strings.Contains(string(md), "客户确认 v26") {
+		t.Error("state.md still shows archived graduation")
+	}
+}

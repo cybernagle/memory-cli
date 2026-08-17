@@ -235,6 +235,18 @@ func toolDefinitions() []map[string]any {
 			},
 		},
 		{
+			"name":        "memory_graduate",
+			"description": "Enqueue a business fact to graduate from memory into the project's system of record (PocketBase, CRM...). Use when a work result becomes business data (客户确认了 v26, 合同条款敲定). Without fact, lists the pending queue.",
+			"inputSchema": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"project": map[string]any{"type": "string"},
+					"fact":    map[string]any{"type": "string", "description": "The business fact to archive; omit to list the queue"},
+				},
+				"required": []string{"project"},
+			},
+		},
+		{
 			"name":        "memory_state_get",
 			"description": "Read a project's shared working state (version, branch/commit, phase, blockers, next actions) written by the previous agent session. Without a project, lists all projects. Stale entries (>24h or written by another session) MUST be verified against git before acting on them.",
 			"inputSchema": map[string]any{
@@ -308,6 +320,8 @@ func (s *Server) handleToolsCall(id any, params map[string]any) {
 		result, err = s.toolSessions(args)
 	case "memory_state_get":
 		result, err = s.toolStateGet(args)
+	case "memory_graduate":
+		result, err = s.toolGraduate(args)
 	case "memory_state_set":
 		result, err = s.toolStateSet(args)
 	default:
@@ -871,4 +885,34 @@ func defaultOf(v, def string) string {
 		return def
 	}
 	return v
+}
+
+
+// toolGraduate enqueues a business fact for archival into the project's system of
+// record, or lists the pending queue when no fact is given.
+func (s *Server) toolGraduate(args map[string]any) (string, error) {
+	project, _ := args["project"].(string)
+	fact, _ := args["fact"].(string)
+	if strings.TrimSpace(fact) == "" {
+		grads, err := s.store.ListGraduations(true)
+		if err != nil {
+			return "", err
+		}
+		if len(grads) == 0 {
+			return "Graduation queue empty.", nil
+		}
+		var sb strings.Builder
+		sb.WriteString(fmt.Sprintf("%d pending graduations:\n", len(grads)))
+		for _, g := range grads {
+			sb.WriteString(fmt.Sprintf("\n[#%d] %s — %s\n     queued %s;archive then `memory graduate done %d --pb <pointer>`",
+				g.ID, g.Project, g.Fact, g.CreatedAt[:10], g.ID))
+		}
+		return sb.String(), nil
+	}
+	g, err := s.store.AddGraduation(project, fact, "")
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("✓ queued #%d: %s — %s\n归档到业务系统后执行 memory graduate done %d --pb <指针>",
+		g.ID, g.Project, g.Fact, g.ID), nil
 }

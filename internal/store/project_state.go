@@ -225,6 +225,17 @@ func (s *SqliteStore) writeStateMarkdown() error {
 		}
 		sb.WriteString("\n")
 	}
+
+	// Pending graduations: business facts waiting to be archived into the project's
+	// system of record (PocketBase ...). Visible at session start so they get drained.
+	if grads, err := s.ListGraduations(true); err == nil && len(grads) > 0 {
+		sb.WriteString("## 待毕业 → 业务系统\n\n")
+		sb.WriteString("> 业务事实需归档到项目的正式记录(PB 等);归档后 `memory graduate done <id> --pb <指针>`。\n\n")
+		for _, g := range grads {
+			sb.WriteString(fmt.Sprintf("- [#%d] %s — %s\n", g.ID, g.Project, g.Fact))
+		}
+		sb.WriteString("\n")
+	}
 	path := s.stateMarkdownPath()
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return err
