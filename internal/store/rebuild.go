@@ -238,7 +238,8 @@ func isNoiseEvent(content string) bool {
 		return true
 	}
 	// Task/system notifications injected as pseudo user-turns ("Q: <task-notification>...").
-	if strings.HasPrefix(c, "Q: <task-notification") || strings.HasPrefix(c, "<task-notification") {
+	if strings.HasPrefix(c, "Q: <task-notification") || strings.HasPrefix(c, "<task-notification") ||
+		strings.HasPrefix(c, "* <task-notification") {
 		return true
 	}
 	return false
