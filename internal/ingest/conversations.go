@@ -249,11 +249,10 @@ func extractContent(raw interface{}, role string) string {
 					parts = append(parts, s)
 				}
 			case "thinking":
-				// Only assistant turns carry thinking; keep it but mark it so the memory
-				// preserves that this was reasoning, not a stated answer.
-				if s, ok := m["thinking"].(string); ok && s != "" {
-					parts = append(parts, "[thinking] "+s)
-				}
+				// Dropped (2026-08-17): unfiltered thinking ingestion polluted 9.6% of the
+				// event log with model monologue ("[thinking] web_reader forbidden。").
+				// Decision reasoning that MATTERS shows up in the assistant's stated text
+				// or in the user's follow-up — capture it there, not from the scratchpad.
 			}
 		}
 		return strings.TrimSpace(strings.Join(parts, "\n"))

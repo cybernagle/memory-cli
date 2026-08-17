@@ -1299,3 +1299,35 @@ func TestGraduationQueue(t *testing.T) {
 		t.Error("state.md still shows archived graduation")
 	}
 }
+
+// TestRebuildSkipsNoiseEvents: thinking/notification events survive in the log as history
+// but never re-enter the derived layer on replay.
+func TestRebuildSkipsNoiseEvents(t *testing.T) {
+	s := tempSqliteStore(t)
+
+	s.IngestMemory(&Memory{Content: "真实工作事实:瑞福莱 v26 部署完成", Phase: PhaseInbox, SessionID: "s1"})
+	s.IngestMemory(&Memory{Content: "[thinking] 这段是模型内心独白,不该进视图", Phase: PhaseInbox, SessionID: "s1"})
+	s.IngestMemory(&Memory{Content: "Q: <task-notification><task-id>x</task-id></task-notification>", Phase: PhaseInbox, SessionID: "s1"})
+
+	if !isNoiseEvent("[thinking] x") || !isNoiseEvent("Q: <task-notification> y") {
+		t.Fatal("isNoiseEvent misjudges")
+	}
+	if isNoiseEvent("包含 [thinking] 字样但有实际内容的正文") {
+		t.Fatal("isNoiseEvent over-filters real content")
+	}
+
+	stats, err := s.RebuildFromEvents()
+	if err != nil {
+		t.Fatalf("rebuild: %v", err)
+	}
+	if stats.Rebuilt != 1 || stats.Skipped != 2 {
+		t.Errorf("rebuilt=%d skipped=%d, want 1/2", stats.Rebuilt, stats.Skipped)
+	}
+	all, _ := s.List(ListOptions{})
+	if len(all) != 1 {
+		t.Errorf("derived layer has %d memories, want 1 (noise leaked)", len(all))
+	}
+	if n, _ := s.RawEntryCount(); n != 3 {
+		t.Errorf("events = %d, want 3 (log must keep noise as history)", n)
+	}
+}

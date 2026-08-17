@@ -2,6 +2,7 @@ package store
 
 import (
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -174,7 +175,13 @@ func (s *SqliteStore) RebuildFromEvents() (*RebuildStats, error) {
 
 	// Replay in sequence order through the unified write path: the command gate, event
 	// append, auto-categorization and dedup all apply exactly as on a live write.
+	// Historical noise events (pre-filter thinking ingestion, system notifications) stay
+	// in the log as honest history but never re-enter the derived layer.
 	for _, e := range events {
+		if isNoiseEvent(e.Content) {
+			stats.Skipped++
+			continue
+		}
 		createdAt, _ := time.Parse("2006-01-02 15:04:05", e.IngestedAt)
 		mem := &Memory{
 			Content:     e.Content,
@@ -218,4 +225,21 @@ func (st *RebuildStats) Describe() string {
 	}
 	return fmt.Sprintf("reindexed %d rows into FTS, %d links, +%d tags, %dms",
 		st.FTSRows, st.Links, st.TagsAdded, st.DurationMs)
+}
+
+
+// isNoiseEvent reports whether a historical event is process noise rather than work
+// signal: model thinking blocks (ingested before the 2026-08-17 filter) and injected
+// system notifications. These remain in raw_entries as history but are excluded from
+// rebuilt views.
+func isNoiseEvent(content string) bool {
+	c := strings.TrimSpace(content)
+	if strings.HasPrefix(c, "[thinking]") {
+		return true
+	}
+	// Task/system notifications injected as pseudo user-turns ("Q: <task-notification>...").
+	if strings.HasPrefix(c, "Q: <task-notification") || strings.HasPrefix(c, "<task-notification") {
+		return true
+	}
+	return false
 }
