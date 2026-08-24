@@ -496,43 +496,117 @@ func (s *Server) toolDelete(args map[string]any) (string, error) {
 }
 
 func (s *Server) toolTimeline(args map[string]any) (string, error) {
-	dateStr, _ := args["date"].(string)
-
-	// Parse date using the same logic as detectTimeIntent.
+	// Accept either date ("today"/"昨天"/"2026-08-16") or an explicit from/to range.
+	// Range queries span multiple days: summarize from session_views (already digested,
+	// one row per session — cheap) instead of raw memories.
 	var from, to time.Time
 	now := time.Now()
+	parseDay := func(s string) (time.Time, bool) {
+		if t, err := time.ParseInLocation("2006-01-02", s, now.Location()); err == nil {
+			return t, true
+		}
+		return time.Time{}, false
+	}
 
-	if dateStr == "today" || dateStr == "今天" || dateStr == "" {
+	fromStr, _ := args["from"].(string)
+	toStr, _ := args["to"].(string)
+	dateStr, _ := args["date"].(string)
+
+	if fromStr != "" || toStr != "" {
+		var ok bool
+		if fromStr != "" {
+			if from, ok = parseDay(fromStr); !ok {
+				return "", fmt.Errorf("invalid from %q (want YYYY-MM-DD)", fromStr)
+			}
+		} else {
+			from = time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+		}
+		if toStr != "" {
+			if to, ok = parseDay(toStr); !ok {
+				return "", fmt.Errorf("invalid to %q (want YYYY-MM-DD)", toStr)
+			}
+			to = to.Add(24*time.Hour - time.Second)
+		} else {
+			to = from.Add(24*time.Hour - time.Second)
+		}
+	} else if dateStr == "today" || dateStr == "今天" || dateStr == "" {
 		from = time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+		to = from.Add(24*time.Hour - time.Second)
 	} else if dateStr == "yesterday" || dateStr == "昨天" {
 		d := now.AddDate(0, 0, -1)
 		from = time.Date(d.Year(), d.Month(), d.Day(), 0, 0, 0, 0, now.Location())
-	} else if t, err := time.Parse("2006-01-02", dateStr); err == nil {
+		to = from.Add(24*time.Hour - time.Second)
+	} else if t, ok := parseDay(dateStr); ok {
 		from = t
+		to = t.Add(24*time.Hour - time.Second)
 	} else {
-		from = now.AddDate(0, 0, -1) // default: yesterday
+		d := now.AddDate(0, 0, -1)
+		from = time.Date(d.Year(), d.Month(), d.Day(), 0, 0, 0, 0, now.Location())
+		to = from.Add(24*time.Hour - time.Second)
 	}
-	to = from.Add(24*time.Hour - time.Second)
 
+	days := to.Sub(from).Hours()/24 + 1
+
+	// Multi-day ranges: session digests are the cheap path (pre-aggregated, LLM-free).
+	if days > 1.5 {
+		views, err := s.store.ListSessionViews(store.SessionViewFilter{Limit: 400})
+		if err == nil {
+			var in []*store.SessionView
+			for _, v := range views {
+				t, err := time.Parse(time.RFC3339, v.LastSeen)
+				if err == nil && !t.Before(from) && !t.After(to) {
+					in = append(in, v)
+				}
+			}
+			if len(in) > 0 {
+				var sb strings.Builder
+				sb.WriteString(fmt.Sprintf("%d 个工作会话(%s ~ %s),按时间倒序:\n\n", len(in),
+					from.Format("01-02"), to.Format("01-02")))
+				for i, v := range in {
+					if i >= 40 {
+						sb.WriteString(fmt.Sprintf("... 还有 %d 个会话\n", len(in)-40))
+						break
+					}
+					day := ""
+					if t, err := time.Parse(time.RFC3339, v.LastSeen); err == nil {
+						day = t.Format("01-02")
+					}
+					line := fmt.Sprintf("[%s] %s", day, v.Task)
+					if v.Entity != "" {
+						line += "(" + v.Entity
+						if v.Facet != "" {
+							line += "/" + v.Facet
+						}
+						line += ")"
+					}
+					sb.WriteString(line + "\n")
+				}
+				return sb.String(), nil
+			}
+		}
+	}
+
+	// Single day: raw memories + LLM narrative, sized to stay well under the MCP 30s
+	// tool budget (LLM ctx 20s, 60 items, 120 chars each).
 	items, err := s.store.List(store.ListOptions{CreatedAfter: &from, CreatedBefore: &to, Limit: 500})
 	if err != nil || len(items) == 0 {
 		return fmt.Sprintf("No memories for %s", from.Format("2006-01-02")), nil
 	}
 
-	if s.llm != nil && len(items) > 0 {
+	if s.llm != nil {
 		var sb strings.Builder
 		sb.WriteString(fmt.Sprintf("Summarize what the user did on %s based on these records (中文):\n\n", from.Format("2006-01-02")))
 		for i, m := range items {
-			if i >= 80 {
+			if i >= 60 {
 				break
 			}
 			c := m.Content
-			if len(c) > 150 {
-				c = c[:150] + "..."
+			if len(c) > 120 {
+				c = c[:120] + "..."
 			}
 			sb.WriteString(fmt.Sprintf("[%s] %s\n", m.CreatedAt.Format("15:04"), c))
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()
 		summary, err := s.llm.Chat(ctx, sb.String())
 		if err == nil && summary != "" {
