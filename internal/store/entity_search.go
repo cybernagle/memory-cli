@@ -61,8 +61,11 @@ func (s *SqliteStore) SearchWithExpansion(opts SearchOptions) ([]*Memory, error)
 		}
 	}
 
-	// Sort by recency (newest first), superseded pushed to back.
-	sortByRecencyAndSupersede(merged)
+	// Sort by relevance, superseded pushed to back. Pure-recency re-sorting buried
+	// old-but-decisive hits: an "8月初定价结论" query returned 08-24 deployment noise
+	// because every recent generic match outranked the 08-05 decision record. First-pass
+	// (IDF-ranked) order is the relevance signal; keep it stable.
+	sortBySupersedeOnly(merged)
 	return merged, nil
 }
 
@@ -170,3 +173,16 @@ func sortByRecencyAndSupersede(memories []*Memory) {
 	})
 }
 
+
+
+// sortBySupersedeOnly demotes superseded memories to the back, preserving the input
+// (relevance) order otherwise.
+func sortBySupersedeOnly(memories []*Memory) {
+	sort.SliceStable(memories, func(i, j int) bool {
+		return !isSupersededMemory(memories[i]) && isSupersededMemory(memories[j])
+	})
+}
+
+func isSupersededMemory(m *Memory) bool {
+	return m.Metadata != nil && m.Metadata["superseded_by"] != nil
+}

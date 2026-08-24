@@ -693,8 +693,10 @@ func (s *Server) toolRemind(args map[string]any) (string, error) {
 // this tool is itself an LLM that understands context, so unlike the dashboard we skip the
 // resolveContext/follow-up-merge stage and go straight to intent detection + search.
 func runAskWorkflowMCP(s *Server, question string, history []chatMessage) (string, map[string]any) {
-	// Time-scoped question? Summarize the activity timeline for that range.
-	if dr, ok := query.DetectTimeIntent(question); ok {
+	// Time-scoped question? Only when it's an ACTIVITY summary ask ("最近做了什么").
+	// Topic questions with a time qualifier ("8月初关于定价的讨论结论是什么") must take
+	// the entity path — the time path would answer "what happened" not "what was concluded".
+	if dr, ok := query.DetectTimeIntent(question); ok && isActivityQuestion(question) {
 		items, err := s.store.List(store.ListOptions{CreatedAfter: &dr.From, CreatedBefore: &dr.To, Limit: 500})
 		if err != nil || len(items) == 0 {
 			return fmt.Sprintf("%s 没有记忆记录。", dr.Label), nil
@@ -703,16 +705,17 @@ func runAskWorkflowMCP(s *Server, question string, history []chatMessage) (strin
 			var sb strings.Builder
 			sb.WriteString(fmt.Sprintf("总结用户在 %s 的活动（共%d条）。用中文。\n\n", dr.Label, len(items)))
 			for i, m := range items {
-				if i >= 80 {
+				if i >= 50 {
 					break
 				}
 				c := m.Content
-				if len(c) > 150 {
-					c = c[:150] + "..."
+				if len(c) > 120 {
+				c = c[:120] + "..."
 				}
 				sb.WriteString(fmt.Sprintf("[%s] %s\n", m.CreatedAt.Format("01-02 15:04"), c))
 			}
-			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+			// Budget: zcode kills MCP tools at 30s; keyword extraction may take up to 8s,
+		ctx, cancel := context.WithTimeout(context.Background(), 18*time.Second)
 			defer cancel()
 			ans, err := s.llm.Chat(ctx, sb.String())
 			if err == nil && ans != "" {
@@ -725,7 +728,7 @@ func runAskWorkflowMCP(s *Server, question string, history []chatMessage) (strin
 	// Entity search path: extract keywords + search all phases.
 	searchQuery := ""
 	if s.llm != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 		kw, err := query.LLMExtractKeywords(ctx, s.llm, question)
 		cancel()
 		if err == nil && strings.TrimSpace(kw) != "" {
@@ -745,13 +748,33 @@ func runAskWorkflowMCP(s *Server, question string, history []chatMessage) (strin
 	org, _ := s.store.SearchWithExpansion(store.SearchOptions{Query: searchQuery, Phase: store.PhaseOrganized, ExcludeSources: excludeAggregates})
 	proc, _ := s.store.SearchWithExpansion(store.SearchOptions{Query: searchQuery, Phase: store.PhaseProcessed, ExcludeSources: excludeAggregates})
 
-	combined := append(org, proc...)
-	combined = append(combined, inbox...)
+	// Balanced phase allocation: concat-order truncation let a flood of generic org
+	// hits (600+) crowd out the processed memories that actually answer the question.
+	combined := make([]*store.Memory, 0, 14)
+	pick := func(list []*store.Memory, n int) {
+		if len(list) > n {
+			list = list[:n]
+		}
+		combined = append(combined, list...)
+	}
+	pick(org, 6)
+	pick(proc, 6)
+	pick(inbox, 2)
+	if os.Getenv("MEMORY_ASK_DEBUG") != "" {
+		fmt.Fprintf(os.Stderr, "[ask-debug] searchQuery=%q\n", searchQuery)
+		fmt.Fprintf(os.Stderr, "[ask-debug] org=%d proc=%d inbox=%d\n", len(org), len(proc), len(inbox))
+		for i, m := range combined {
+			if i >= 6 { break }
+			fmt.Fprintf(os.Stderr, "[ask-debug] top%d %s %s\n", i, m.ID[:8], m.Content[:min(60, len(m.Content))])
+		}
+		if views, err := s.store.SessionViewsMatchingKeywords(query.SplitKeywordsForSnippet(searchQuery), 3); err == nil {
+			for _, v := range views {
+				fmt.Fprintf(os.Stderr, "[ask-debug] digest: %s | %s\n", v.Entity, v.Task)
+			}
+		}
+	}
 	if len(combined) == 0 {
 		return "No relevant memories found.", nil
-	}
-	if len(combined) > 20 {
-		combined = combined[:20]
 	}
 
 	// Build context for LLM, centering snippets on the matched keywords.
@@ -761,7 +784,7 @@ func runAskWorkflowMCP(s *Server, question string, history []chatMessage) (strin
 	// Structured grounding first: session digests matching the question's keywords give
 	// the LLM pre-aggregated task/entity/lesson context, so answers about "what did I do
 	// on X" come out structured instead of being re-synthesized from raw memory fragments.
-	if views, err := s.store.SessionViewsMatchingKeywords(snippetKWs, 5); err == nil && len(views) > 0 {
+	if views, err := s.store.SessionViewsMatchingKeywords(snippetKWs, 3); err == nil && len(views) > 0 {
 		sb.WriteString("\n=== 相关会话工作摘要(按 session 聚合的派生视图) ===")
 		for _, v := range views {
 			line := fmt.Sprintf("\n[%s] task: %s", v.LastSeen[:min(10, len(v.LastSeen))], v.Task)
@@ -785,8 +808,8 @@ func runAskWorkflowMCP(s *Server, question string, history []chatMessage) (strin
 
 	for i, m := range combined {
 		c := m.Content
-		if len(c) > 300 {
-			c = query.ExtractSnippet(c, snippetKWs, 300)
+		if len(c) > 220 {
+			c = query.ExtractSnippet(c, snippetKWs, 220)
 		}
 		dateStr := m.CreatedAt.Format("2006-01-02")
 		if m.Phase == store.PhaseOrganized || m.Phase == store.PhaseProcessed {
@@ -806,7 +829,8 @@ Question: %s
 Answer concisely in the user's language:`, sb.String(), question)
 
 	if s.llm != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		// Budget: zcode kills MCP tools at 30s; keyword extraction may take up to 8s,
+		ctx, cancel := context.WithTimeout(context.Background(), 18*time.Second)
 		defer cancel()
 		answer, err := s.llm.Chat(ctx, prompt)
 		if err == nil && answer != "" {
@@ -1000,4 +1024,21 @@ func (s *Server) toolGraduate(args map[string]any) (string, error) {
 	}
 	return fmt.Sprintf("✓ queued #%d: %s — %s\n归档到业务系统后执行 memory graduate done %d --pb <指针>",
 		g.ID, g.Project, g.Fact, g.ID), nil
+}
+
+
+// isActivityQuestion reports whether the question asks for an activity recap rather
+// than a topic answer. Short time-anchored questions ("今天呢?") and 做了/活动 style
+// phrasing qualify; long "关于X的结论" questions do not.
+func isActivityQuestion(q string) bool {
+	runes := []rune(q)
+	if len(runes) <= 16 {
+		return true
+	}
+	for _, kw := range []string{"做了", "干了", "活动", "怎么过", "忙了", "干什么", "干嘛"} {
+		if strings.Contains(q, kw) {
+			return true
+		}
+	}
+	return false
 }

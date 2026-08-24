@@ -78,6 +78,35 @@ func DetectTimeIntent(question string) (*DateRange, bool) {
 		}
 		return &DateRange{From: from, To: to, Label: fmt.Sprintf("%s到%s", from.Format("1月2日"), to.Format("1月2日"))}, true
 	}
+	// N月初 / N月中 / N月底(含可选年份前缀 "2026年8月初")
+	if m := regexp.MustCompile(`(?:\d{4})?年?(\d{1,2})月初`).FindStringSubmatch(question); m != nil {
+		month, _ := strconv.Atoi(m[1])
+		from := time.Date(now.Year(), time.Month(month), 1, 0, 0, 0, 0, loc)
+		to := time.Date(now.Year(), time.Month(month), 10, 23, 59, 59, 0, loc)
+		if to.After(now) { from = from.AddDate(-1, 0, 0); to = to.AddDate(-1, 0, 0) }
+		return &DateRange{From: from, To: to, Label: fmt.Sprintf("%d月初", month)}, true
+	}
+	if m := regexp.MustCompile(`(?:\d{4})?年?(\d{1,2})月中`).FindStringSubmatch(question); m != nil {
+		month, _ := strconv.Atoi(m[1])
+		from := time.Date(now.Year(), time.Month(month), 8, 0, 0, 0, 0, loc)
+		to := time.Date(now.Year(), time.Month(month), 20, 23, 59, 59, 0, loc)
+		if to.After(now) { from = from.AddDate(-1, 0, 0); to = to.AddDate(-1, 0, 0) }
+		return &DateRange{From: from, To: to, Label: fmt.Sprintf("%d月中", month)}, true
+	}
+	if m := regexp.MustCompile(`(?:\d{4})?年?(\d{1,2})月底`).FindStringSubmatch(question); m != nil {
+		month, _ := strconv.Atoi(m[1])
+		from := time.Date(now.Year(), time.Month(month), 18, 0, 0, 0, 0, loc)
+		to := time.Date(now.Year(), time.Month(month)+1, 1, 0, 0, 0, 0, loc).Add(-time.Second)
+		if to.After(now) { from = from.AddDate(-1, 0, 0); to = to.AddDate(-1, 0, 0) }
+		return &DateRange{From: from, To: to, Label: fmt.Sprintf("%d月底", month)}, true
+	}
+	if m := regexp.MustCompile(`(?:\d{4})?年?(\d{1,2})月\s*(?:份?)?$`).FindStringSubmatch(question); m != nil {
+		month, _ := strconv.Atoi(m[1])
+		from := time.Date(now.Year(), time.Month(month), 1, 0, 0, 0, 0, loc)
+		to := time.Date(now.Year(), time.Month(month)+1, 1, 0, 0, 0, 0, loc).Add(-time.Second)
+		if to.After(now) { from = from.AddDate(-1, 0, 0); to = to.AddDate(-1, 0, 0) }
+		return &DateRange{From: from, To: to, Label: fmt.Sprintf("%d月", month)}, true
+	}
 	if m := regexp.MustCompile(`(\d{1,2})月(\d{1,2})[号日]`).FindStringSubmatch(question); m != nil {
 		month, _ := strconv.Atoi(m[1])
 		day, _ := strconv.Atoi(m[2])
@@ -172,14 +201,20 @@ func SplitCJKKeywords(question string) string {
 	re := regexp.MustCompile(`[A-Za-z0-9.-]{2,}|[\p{Han}]+`)
 	for _, m := range re.FindAllString(question, -1) {
 		if isCJK(m) {
-			// CJK segment: take first 3 chars as the search token (most distinctive part).
+			// CJK segment: short runs pass through; long runs emit sliding 3-gram windows
+			// (capped) so keywords buried mid-run (定价方法论 → 定价方) survive the fallback
+			// path — the old first-3-chars-only rule discarded everything after char 3.
 			runes := []rune(m)
-			if len(runes) >= 2 {
-				n := 3
-				if n > len(runes) {
-					n = len(runes)
+			if len(runes) >= 2 && len(runes) <= 3 {
+				tokens = append(tokens, m)
+			} else if len(runes) > 3 {
+				windows := len(runes) - 2
+				if windows > 8 {
+					windows = 8
 				}
-				tokens = append(tokens, string(runes[:n]))
+				for i := 0; i < windows; i++ {
+					tokens = append(tokens, string(runes[i:i+3]))
+				}
 			}
 		} else if len(m) >= 2 {
 			// ASCII word.
